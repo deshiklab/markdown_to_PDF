@@ -6,7 +6,8 @@
     <meta name="theme-color" content="#f6f5f0" />
     <meta name="description" content="Turn Markdown files into beautifully styled PDFs. Free, fast, and private — your files never leave your device." />
     <title>Folio — Markdown to PDF, beautifully</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
     <div class="app-shell">
@@ -197,6 +198,36 @@
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script type="module" src="/src/main.js"></script>
+    <script type="module">
+      if (window.location.protocol === 'file:') {
+        const loadLocalScript = (src) => new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = src;
+          script.onload = resolve;
+          script.onerror = () => reject(new Error(`Could not load ${src}`));
+          document.head.append(script);
+        });
+
+        try {
+          await loadLocalScript('./node_modules/marked/lib/marked.umd.js');
+          await loadLocalScript('./node_modules/dompurify/dist/purify.min.js');
+          await loadLocalScript('./node_modules/html2pdf.js/dist/html2pdf.bundle.min.js');
+          await loadLocalScript('./src/app-core.js');
+          window.startFolioApp({
+            marked: window.marked,
+            DOMPurify: window.DOMPurify,
+            loadHtml2Pdf: async () => window.html2pdf,
+          });
+        } catch (error) {
+          console.error('Folio local startup failed:', error);
+          const notice = document.createElement('p');
+          notice.className = 'local-setup-notice';
+          notice.textContent = 'To run Folio directly from this file, install its dependencies once with “npm install” in the project folder, then reopen index.html.';
+          document.body.append(notice);
+        }
+      } else {
+        await import('./src/main.js');
+      }
+    </script>
   </body>
 </html>
