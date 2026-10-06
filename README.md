@@ -34,7 +34,8 @@ npm run preview
 - Open or drag-and-drop `.md` / `.markdown` files
 - Live GitHub-flavored Markdown preview with safe HTML sanitization
 - Editorial, Modern, and Warm Paper document themes
-- A4, US Letter, and A5 page sizes, with three margin presets
+- A4, US Letter, and A5 page sizes, portrait or landscape, with three margin presets
 - Download a PDF directly in the browser
+- Draft and export settings auto-save locally and restore on your next visit
 - Basic formatting shortcuts and a starter document
 - Responsive layout; document processing happens on-device

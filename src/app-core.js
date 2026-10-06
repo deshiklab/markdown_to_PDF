@@ -35,6 +35,9 @@ const paper = document.querySelector('#paper');
 const paperSelect = document.querySelector('#paperSelect');
 const themeSelect = document.querySelector('#themeSelect');
 const marginSelect = document.querySelector('#marginSelect');
+const orientationSelect = document.querySelector('#orientationSelect');
+const saveStatus = document.querySelector('#saveStatus');
+const saveStatusText = saveStatus.querySelector('span');
 const fileNameLabel = document.querySelector('#fileName');
 const wordCountLabel = document.querySelector('#wordCount');
 const lineNumbers = document.querySelector('#lineNumbers');
@@ -46,8 +49,10 @@ const exportButton = document.querySelector('#exportButton');
 const toast = document.querySelector('#toast');
 const paperStatus = document.querySelector('#paperStatus');
 
+const workspaceStorageKey = 'folio:workspace:v1';
 let currentFileName = 'morning-notes.md';
 let toastTimeout;
+let saveTimeout;
 let dragDepth = 0;
 let isExporting = false;
 
@@ -55,6 +60,49 @@ marked.use({
   gfm: true,
   breaks: false,
 });
+
+function setSaveStatus(label, state = 'saved') {
+  saveStatusText.textContent = label;
+  saveStatus.dataset.state = state;
+}
+
+function readSavedWorkspace() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(workspaceStorageKey) || 'null');
+    return saved && typeof saved.markdown === 'string' ? saved : null;
+  } catch (error) {
+    console.warn('Local draft could not be read:', error);
+    return null;
+  }
+}
+
+function saveWorkspaceNow() {
+  window.clearTimeout(saveTimeout);
+  saveTimeout = null;
+  try {
+    window.localStorage.setItem(workspaceStorageKey, JSON.stringify({
+      markdown: input.value,
+      fileName: currentFileName,
+      theme: themeSelect.value,
+      paper: paperSelect.value,
+      margin: marginSelect.value,
+      orientation: orientationSelect.value,
+      updatedAt: Date.now(),
+    }));
+    setSaveStatus('Saved locally', 'saved');
+    return true;
+  } catch (error) {
+    console.warn('Local draft could not be saved:', error);
+    setSaveStatus('Local save unavailable', 'error');
+    return false;
+  }
+}
+
+function scheduleSave() {
+  window.clearTimeout(saveTimeout);
+  setSaveStatus('Saving…', 'saving');
+  saveTimeout = window.setTimeout(saveWorkspaceNow, 450);
+}
 
 function renderMarkdown() {
   const source = input.value;
@@ -119,12 +167,15 @@ function showToast(message, isError = false) {
 function updatePaperSettings() {
   paper.dataset.theme = themeSelect.value;
   paper.dataset.margin = marginSelect.value;
+  paper.dataset.orientation = orientationSelect.value;
   const sizes = {
     a4: 'A4',
     letter: 'US Letter',
     a5: 'A5',
   };
-  paperStatus.textContent = `${sizes[paperSelect.value] ?? 'A4'} · Portrait`;
+  const orientation = orientationSelect.value === 'landscape' ? 'Landscape' : 'Portrait';
+  paperStatus.textContent = `${sizes[paperSelect.value] ?? 'A4'} · ${orientation}`;
+  paper.setAttribute('aria-label', `${sizes[paperSelect.value] ?? 'A4'} ${orientation.toLowerCase()} document preview`);
 }
 
 function selectFile(file) {
@@ -137,6 +188,7 @@ function selectFile(file) {
   file.text().then((content) => {
     const name = file.name || 'untitled.md';
     setEditorValue(content, name);
+    scheduleSave();
     showToast(`Loaded ${name}`);
   }).catch(() => {
     showToast('That file could not be opened. Please try another Markdown file.', true);
@@ -149,17 +201,29 @@ function normalizedPdfName(name) {
   return `${safe || 'document'}.pdf`;
 }
 
+function getPdfPageWidthPixels() {
+  const dimensions = {
+    a4: { width: 210, height: 297 },
+    letter: { width: 215.9, height: 279.4 },
+    a5: { width: 148, height: 210 },
+  };
+  const page = dimensions[paperSelect.value] ?? dimensions.a4;
+  const widthInMillimeters = orientationSelect.value === 'landscape' ? page.height : page.width;
+  return Math.round(widthInMillimeters * (96 / 25.4));
+}
+
 function createPdfDocument() {
+  const pageWidth = getPdfPageWidthPixels();
   const root = document.createElement('div');
   root.className = 'pdf-export-root';
   root.setAttribute('aria-hidden', 'true');
-  root.style.cssText = 'position:absolute;top:0;left:-10000px;width:794px;overflow:visible;pointer-events:none;z-index:-1;';
+  root.style.cssText = `position:absolute;top:0;left:-10000px;width:${pageWidth}px;overflow:visible;pointer-events:none;z-index:-1;`;
 
   const exportPaper = paper.cloneNode(true);
   exportPaper.removeAttribute('id');
   exportPaper.classList.remove('is-exporting');
   exportPaper.classList.add('pdf-export');
-  exportPaper.style.width = '794px';
+  exportPaper.style.width = `${pageWidth}px`;
   exportPaper.style.maxWidth = 'none';
   exportPaper.style.minHeight = '0';
   exportPaper.style.height = 'auto';
@@ -210,6 +274,7 @@ async function downloadPdf() {
     const html2pdf = await loadHtml2Pdf();
     const { root, exportPaper } = createPdfDocument();
     exportRoot = root;
+    const targetPageWidth = getPdfPageWidthPixels();
     const options = {
       margin: 0,
       filename: normalizedPdfName(currentFileName),
@@ -222,12 +287,12 @@ async function downloadPdf() {
         backgroundColor: null,
         logging: false,
         scrollY: 0,
-        windowWidth: Math.max(window.innerWidth, 1024),
+        windowWidth: Math.max(window.innerWidth, targetPageWidth, 1024),
       },
       jsPDF: {
         unit: 'mm',
         format: paperSelect.value,
-        orientation: 'portrait',
+        orientation: orientationSelect.value,
         compress: true,
       },
       pagebreak: {
@@ -260,6 +325,7 @@ function replaceSelection(before, after = before, emptyText = '') {
   input.setSelectionRange(selectionStart, selectionEnd);
   input.focus();
   renderMarkdown();
+  scheduleSave();
 }
 
 function prefixSelectedLines(prefix) {
@@ -274,15 +340,18 @@ function prefixSelectedLines(prefix) {
   input.setSelectionRange(lineStart, lineStart + updated.length);
   input.focus();
   renderMarkdown();
+  scheduleSave();
 }
 
 openFileButton.addEventListener('click', () => fileInput.click());
 document.querySelector('#sampleButton').addEventListener('click', () => {
   setEditorValue(sampleMarkdown, 'morning-notes.md');
+  scheduleSave();
   showToast('Sample Markdown loaded. Make it your own!');
 });
 document.querySelector('#clearButton').addEventListener('click', () => {
   setEditorValue('', 'untitled.md');
+  scheduleSave();
   input.focus();
   showToast('Editor cleared. Start fresh whenever you’re ready.');
 });
@@ -290,12 +359,18 @@ fileInput.addEventListener('change', (event) => {
   selectFile(event.target.files?.[0]);
   fileInput.value = '';
 });
-input.addEventListener('input', renderMarkdown);
+input.addEventListener('input', () => {
+  renderMarkdown();
+  scheduleSave();
+});
 input.addEventListener('scroll', () => { lineNumbers.scrollTop = input.scrollTop; }, { passive: true });
 exportButton.addEventListener('click', downloadPdf);
-themeSelect.addEventListener('change', updatePaperSettings);
-paperSelect.addEventListener('change', updatePaperSettings);
-marginSelect.addEventListener('change', updatePaperSettings);
+[themeSelect, paperSelect, marginSelect, orientationSelect].forEach((control) => {
+  control.addEventListener('change', () => {
+    updatePaperSettings();
+    scheduleSave();
+  });
+});
 
 document.querySelectorAll('[data-format]').forEach((button) => {
   button.addEventListener('click', () => {
@@ -324,6 +399,7 @@ input.addEventListener('keydown', (event) => {
     event.preventDefault();
     input.setRangeText('  ', input.selectionStart, input.selectionEnd, 'end');
     renderMarkdown();
+    scheduleSave();
   }
 });
 
@@ -358,13 +434,36 @@ document.addEventListener('drop', (event) => {
 });
 
 window.addEventListener('keydown', (event) => {
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'o') {
+  const modifier = event.metaKey || event.ctrlKey;
+  if (modifier && event.key.toLowerCase() === 'o') {
     event.preventDefault();
     fileInput.click();
+  } else if (modifier && event.key.toLowerCase() === 's') {
+    event.preventDefault();
+    const saved = saveWorkspaceNow();
+    showToast(saved ? 'Draft saved on this device.' : 'Local saving is unavailable in this browser.', !saved);
   }
 });
 
-setEditorValue(sampleMarkdown, currentFileName);
+window.addEventListener('beforeunload', () => {
+  if (saveTimeout) saveWorkspaceNow();
+});
+
+const savedWorkspace = readSavedWorkspace();
+if (savedWorkspace) {
+  const supportedThemes = ['editorial', 'modern', 'warm'];
+  const supportedPapers = ['a4', 'letter', 'a5'];
+  const supportedMargins = ['comfortable', 'compact', 'wide'];
+  themeSelect.value = supportedThemes.includes(savedWorkspace.theme) ? savedWorkspace.theme : 'editorial';
+  paperSelect.value = supportedPapers.includes(savedWorkspace.paper) ? savedWorkspace.paper : 'a4';
+  marginSelect.value = supportedMargins.includes(savedWorkspace.margin) ? savedWorkspace.margin : 'comfortable';
+  orientationSelect.value = savedWorkspace.orientation === 'landscape' ? 'landscape' : 'portrait';
+  setEditorValue(savedWorkspace.markdown, savedWorkspace.fileName || 'untitled.md');
+  setSaveStatus('Draft restored', 'saved');
+} else {
+  setEditorValue(sampleMarkdown, currentFileName);
+  setSaveStatus('Auto-save ready', 'saved');
+}
 updatePaperSettings();
 
 };

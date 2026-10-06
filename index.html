@@ -113,7 +113,10 @@
               </div>
               <div class="editor-footer">
                 <div class="file-state"><span class="file-dot"></span><span id="fileName">morning-notes.md</span><span class="footer-divider"></span><span id="wordCount">0 words</span></div>
-                <span class="editor-hint">Markdown supported</span>
+                <span class="autosave-status" id="saveStatus" aria-live="polite">
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.2 2.8 2.8 6.2-6.4"/></svg>
+                  <span>Auto-save ready</span>
+                </span>
               </div>
             </section>
 
@@ -152,6 +155,15 @@
                   </select>
                   <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.25 3.5 3.5 3.5-3.5"/></svg>
                 </label>
+                <span class="controls-divider controls-divider-orientation"></span>
+                <label class="select-control select-control-orientation">
+                  <span>ORIENTATION</span>
+                  <select id="orientationSelect" aria-label="PDF page orientation">
+                    <option value="portrait">Portrait</option>
+                    <option value="landscape">Landscape</option>
+                  </select>
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.25 3.5 3.5 3.5-3.5"/></svg>
+                </label>
                 <span class="controls-divider controls-divider-margin"></span>
                 <label class="select-control select-control-margin">
                   <span>MARGINS</span>
@@ -166,7 +178,7 @@
               </div>
 
               <div class="preview-stage" id="previewStage">
-                <article class="paper" id="paper" data-theme="editorial" data-margin="comfortable" aria-label="Rendered Markdown document">
+                <article class="paper" id="paper" data-theme="editorial" data-margin="comfortable" data-orientation="portrait" aria-label="Rendered Markdown document">
                   <div class="document-content" id="previewContent"></div>
                 </article>
               </div>
