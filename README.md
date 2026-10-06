@@ -29,6 +29,10 @@ npm run build
 npm run preview
 ```
 
+## Live preview on GitHub Pages
+
+The `Deploy Folio preview` GitHub Actions workflow builds and publishes this branch whenever it is pushed. After the first successful deployment, open [the live preview](https://deshiklab.github.io/markdown_to_PDF/). You can also start a deployment manually from the repository’s **Actions** tab. If Pages has not been enabled for the repository yet, set **Settings → Pages → Build and deployment → Source** to **GitHub Actions**.
+
 ## Features
 
 - Open or drag-and-drop `.md` / `.markdown` files
