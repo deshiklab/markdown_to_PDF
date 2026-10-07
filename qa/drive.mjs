@@ -136,6 +136,35 @@ function total(ink) {
 }
 
 /* ------------------------------------------------------------------ sign ---- */
+/* A snap click repaints the stage, and the repaint can rebuild the button under
+   the pointer — the click then lands on a node that is already gone and the mark
+   stays where it was. So place it, read the handle back off the sheet, and try
+   again until the mark is in the band it was asked for. */
+async function placeParty(key, position) {
+  const [row, column] = position.split('-');
+  const wantY = { top: 0, middle: 1, bottom: 2 }[row];
+  const wantX = { left: 0, centre: 1, center: 1, middle: 1, right: 2 }[column];
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await page.click(`[data-pos="${key}:${position}"]`);
+    await sleep(430);
+    const band = await page.evaluate(({ party }) => {
+      const paper = document.querySelector('#sgPaper');
+      const handle = document.querySelector(`[data-handle="${party}"]`);
+      if (!paper || !handle || handle.hidden) return null;
+      const sheet = paper.getBoundingClientRect();
+      const box = handle.getBoundingClientRect();
+      return [
+        Math.floor((((box.x - sheet.x) + box.width / 2) / sheet.width) * 3),
+        Math.floor((((box.y - sheet.y) + box.height / 2) / sheet.height) * 3),
+      ].map((value) => Math.min(2, Math.max(0, value)));
+    }, { party: key });
+    if (band && band[0] === wantX && band[1] === wantY) return true;
+    say(`place ${key}:${position}`, `attempt ${attempt} — handle in band ${band ? band.join(',') : 'not shown'}`);
+  }
+  flag(`the ${key} mark never moved to ${position} after three attempts`);
+  return false;
+}
+
 async function sign() {
   await page.setViewport({ width: 1440, height: 1000 });
   await goto(page, '#/sign', 1900);
@@ -198,8 +227,8 @@ async function sign() {
   await page.click('.sg-mark [data-use="b"]');
   await sleep(700);
   say('handles now', await page.$$eval('.sg-handle:not([hidden])', (nodes) => nodes.map((n) => n.dataset.handle).join('+') || 'none'));
-  await page.click('[data-pos="a:bottom-right"]');
-  await page.click('[data-pos="b:bottom-left"]');
+  await placeParty('a', 'bottom-right');
+  await placeParty('b', 'bottom-left');
   await sleep(700);
   const geo = await page.evaluate(() => {
     document.querySelector('#sgPaper')?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
@@ -293,8 +322,8 @@ async function sign() {
   await feed(page, '#sgDrop', ['rot90.pdf']);
   await sleep(3400);
   say('rotated canvas', await page.$eval('#sgCanvas', (node) => `${node.width}x${node.height}`).catch(() => 'none'));
-  await page.click('[data-pos="a:bottom-right"]');
-  await page.click('[data-pos="b:top-left"]');
+  await placeParty('a', 'bottom-right');
+  await placeParty('b', 'top-left');
   await sleep(600);
   await page.$eval('#sgFlatten', (node) => {
     if (node.checked) node.click();
@@ -1145,7 +1174,7 @@ async function touch() {
   await sleep(600);
   await feed(page, '#sgDrop', ['alpha.pdf']);
   await sleep(3800);
-  await page.click('[data-pos="a:bottom-center"]');
+  await placeParty('a', 'bottom-center');
   await sleep(900);
   const geo = await page.evaluate(() => {
     const paper = document.querySelector('#sgPaper').getBoundingClientRect();
