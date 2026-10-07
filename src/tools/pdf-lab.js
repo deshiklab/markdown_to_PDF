@@ -96,7 +96,7 @@ function layout() {
     <div class="panel-header">
       <div class="panel-title-group">
         <span class="panel-index">01</span>
-        <div><h3 id="lab-side-title">Your PDFs</h3><p>Nothing is uploaded</p></div>
+        <div><h3 id="lab-side-title">Your PDFs</h3><p id="labSideNote">Nothing is uploaded</p></div>
       </div>
       <div class="panel-header-actions">
         <button class="button button-light" type="button" id="labClear"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 6.5h9m-7.9 0 .5 9h5.8l.5-9M8 6.5V4.8h4v1.7"/></svg><span>Clear</span></button>
@@ -326,8 +326,14 @@ function paintMode(root) {
 function paintFiles(root) {
   const list = q('#labFileList', root);
   const count = q('#labFileCount', root);
-  const shell = q('#labShell', root);
-  shell?.classList.toggle('has-files', state.sources.length > 0);
+  root.classList.toggle('has-input', state.sources.length > 0);
+  const note = q('#labSideNote', root);
+  if (note) {
+    const pages = state.sources.reduce((total, file) => total + file.pageCount, 0);
+    note.textContent = state.sources.length
+      ? `${state.sources.length} ${state.sources.length === 1 ? 'file' : 'files'} · ${pages} ${pages === 1 ? 'page' : 'pages'} on this tab`
+      : 'Nothing is uploaded';
+  }
   list.innerHTML = '';
   if (!state.sources.length) {
     list.classList.remove('has-files');

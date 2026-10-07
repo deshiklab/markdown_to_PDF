@@ -71,7 +71,7 @@ function layout() {
     <div class="panel-header">
       <div class="panel-title-group">
         <span class="panel-index">01</span>
-        <div><h3 id="cv-side-title">Input</h3><p>Drop it, we'll handle it</p></div>
+        <div><h3 id="cv-side-title">Input</h3><p id="cvSideNote">Drop it, we'll handle it</p></div>
       </div>
       <div class="panel-header-actions"><span class="lab-count" id="cvCount">nothing yet</span></div>
     </div>
@@ -345,6 +345,7 @@ async function handleFiles(files, root) {
 /* ------------------------------------------------------------ painting ---- */
 function paintMode(root) {
   q('#cvShell', root).dataset.mode = state.form.mode;
+  root.classList.toggle('has-input', state.images.length + state.pdfs.length > 0);
   qa('[data-cv-mode]', root).forEach((node) => {
     const on = node.dataset.cvMode === state.form.mode;
     node.classList.toggle('is-on', on);
@@ -370,6 +371,21 @@ function paintMode(root) {
   estimateImages(root);
   estimateOut(root);
   paintShrinkList(root);
+  paintSideNote(root);
+}
+
+function paintSideNote(root) {
+  const note = q('#cvSideNote', root);
+  if (!note) return;
+  const one = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+  const pages = state.pdfs.reduce((total, pdf) => total + pdf.pages.length, 0);
+  if (state.form.mode === 'text' || state.form.mode === 'images-out') {
+    note.textContent = state.pdfs.length ? `${one(state.pdfs.length, 'pdf')} · ${pages} ${pages === 1 ? 'page' : 'pages'} read locally` : 'One PDF, any page count';
+  } else if (state.form.mode === 'shrink') {
+    note.textContent = state.images.length ? `${one(state.images.length, 'image')} to squeeze · ${bytes(state.images.reduce((sum, image) => sum + (image.file?.size ?? image.size ?? 0), 0))}` : 'Drop the photos you want lighter';
+  } else {
+    note.textContent = state.images.length ? `${one(state.images.length, 'image')} ready — drag to reorder` : "Drop it, we'll handle it";
+  }
 }
 
 function renderImages(root) {
@@ -431,6 +447,7 @@ function renderImages(root) {
     });
     list.append(item);
   });
+  paintSideNote(root);
 }
 
 function renderPdf(root) {
@@ -459,6 +476,7 @@ function renderPdf(root) {
     });
     list.append(item);
   });
+  paintSideNote(root);
 }
 
 function countWords(pdf) {

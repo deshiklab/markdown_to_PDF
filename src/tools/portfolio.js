@@ -63,7 +63,7 @@ function layout() {
     <div class="panel-header">
       <div class="panel-title-group">
         <span class="panel-index">01</span>
-        <div><h3 id="pf-side-title">The shoot</h3><p>Add frames, set the words</p></div>
+        <div><h3 id="pf-side-title">The shoot</h3><p id="pfSideNote">Add frames, set the words</p></div>
       </div>
       <div class="panel-header-actions"><button class="button button-light" type="button" id="pfAdd"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4.5v11m-5.5-5.5h11"/></svg><span>Add</span></button></div>
     </div>
@@ -139,6 +139,13 @@ function layout() {
       <label class="field field-switch" title="Larger images, sharper on paper, bigger file"><input type="checkbox" class="switch-input" id="pfPrint" /><span class="switch-track" aria-hidden="true"></span><span class="field-label">Print quality</span></label>
     </div>
 
+    <div class="pf-cover-pick" id="pfCoverPick" hidden>
+      <button class="button button-light" type="button" id="pfCoverChoose"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"><rect x="3.4" y="5" width="13.2" height="10" rx="1.4"/><circle cx="7.4" cy="8.8" r="1.1"/><path d="m4.6 13.6 3.4-3.2 2.4 2.2 2.5-2.4 3.1 3"/></svg><span>Choose a cover</span></button>
+      <span class="pf-cover-thumb" id="pfCoverThumb" hidden><img alt="" /></span>
+      <span class="pf-cover-state" id="pfCoverState">Nothing picked yet — the title page shows alone.</span>
+      <button class="button button-text" type="button" id="pfCoverClear" hidden>Remove</button>
+    </div>
+
     <div class="pf-stage" id="pfStage"></div>
     <div class="preview-footer"><span><svg viewBox="0 0 18 18" aria-hidden="true"><path d="M4.25 3.5h9.5v11h-9.5z"/><path d="M7 6.5h4m-4 2.5h4m-4 2.5h2.5"/></svg><span id="pfStatus">Nothing on the desk yet</span></span><span>Scroll the pages, then download</span></div>
   </section>
@@ -177,6 +184,32 @@ function wire(root) {
   bind('pfTone', 'tone');
   bind('pfRatio', 'ratio');
   bind('pfCover', 'cover');
+
+  q('#pfCoverChoose', root)?.addEventListener('click', async () => {
+    const [file] = await pickFiles({ accept: 'image/*', multiple: false });
+    if (!file) return;
+    try {
+      const info = await readImage(file);
+      if (state.cover?.url) URL.revokeObjectURL(state.cover.url);
+      state.cover = { ...info, name: file.name, size: file.size };
+      if (state.form.cover !== 'upload') {
+        state.form.cover = 'upload';
+        const select = q('#pfCover', root);
+        if (select) select.value = 'upload';
+        save();
+      }
+      toast('Cover set — it prints on the title page.');
+      render(root);
+    } catch (error) {
+      console.error(error);
+      toast('That image could not be read.', true);
+    }
+  });
+  q('#pfCoverClear', root)?.addEventListener('click', () => {
+    if (state.cover?.url) URL.revokeObjectURL(state.cover.url);
+    state.cover = null;
+    render(root);
+  });
   bind('pfPadding', 'padding', Number);
   bind('pfGap', 'gap', Number);
   bind('pfCaptions', 'captions');
@@ -322,6 +355,8 @@ function render(root) {
   }
   stage.append(html);
   const count = html.querySelectorAll('.pf-page').length;
+  paintCover(root);
+  root.classList.toggle('has-input', state.photos.length > 0);
   q('#pfPages', root).textContent = `${count} ${count === 1 ? 'page' : 'pages'}`;
   q('#pfStatus', root).textContent = `${photos.length} frames · ${state.form.pageSize.toUpperCase()} · ${LAYOUTS.find((item) => item.id === state.form.layout)?.label}`;
   wirePhotoRows(root);
@@ -476,9 +511,38 @@ function wirePhotoRows(root) {
   });
 }
 
+function paintCover(root) {
+  const pick = q('#pfCoverPick', root);
+  if (!pick) return;
+  pick.hidden = state.form.cover !== 'upload';
+  const thumb = q('#pfCoverThumb', root);
+  const state_note = q('#pfCoverState', root);
+  const clear = q('#pfCoverClear', root);
+  if (!state.cover) {
+    thumb.hidden = true;
+    clear.hidden = true;
+    state_note.textContent = 'Nothing picked yet — the title page shows alone.';
+    return;
+  }
+  thumb.hidden = false;
+  clear.hidden = false;
+  thumb.querySelector('img').src = state.cover.url;
+  state_note.textContent = `${state.cover.name} · ${state.cover.width}×${state.cover.height}`;
+}
+
+function paintSideNote(root) {
+  const note = q('#pfSideNote', root);
+  if (!note) return;
+  const total = state.photos.reduce((sum, photo) => sum + (photo.size ?? photo.file?.size ?? 0), 0);
+  note.textContent = state.photos.length
+    ? `${state.photos.length} ${state.photos.length === 1 ? 'frame' : 'frames'} · ${bytes(total)} on this tab`
+    : 'Add frames, set the words';
+}
+
 function renderPhotoList(root) {
   const list = q('#pfPhotos', root);
   if (!list) return;
+  paintSideNote(root);
   list.innerHTML = '';
   if (!state.photos.length) {
     list.append(el('li', { class: 'lab-empty', text: 'Add photos and they will line up here — drag to reorder, add a caption for the plate.' }));

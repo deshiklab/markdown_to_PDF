@@ -121,7 +121,7 @@ function layout() {
     <div class="panel-header">
       <div class="panel-title-group">
         <span class="panel-index">01</span>
-        <div><h3 id="tr-side-title">Bring text in</h3><p>PDF, Markdown studio, or paste</p></div>
+        <div><h3 id="tr-side-title">Bring text in</h3><p id="trSideNote">PDF, Markdown studio, or paste</p></div>
       </div>
       <div class="panel-header-actions"><span class="lab-count" id="trOriginState">empty</span></div>
     </div>
@@ -425,6 +425,7 @@ async function ingestPdf(file, root) {
     await doc.cleanup?.();
     state.segments = segments;
     state.origin = 'pdf';
+    state.originLabel = file.name;
     state.fileName = file.name.replace(/\.pdf$/i, '');
     state.pageCount = doc.numPages;
     if (label) label.textContent = `${file.name} · ${doc.numPages} pages`;
@@ -459,6 +460,7 @@ function ingestText(text, name, root) {
     .filter(Boolean);
   state.segments = paragraphs.map((value, index) => ({ id: `t${index}`, page: 1, label: `line ${index + 1}`, source: value, translated: '', status: 'idle', error: '' }));
   state.origin = 'text';
+  state.originLabel = name;
   state.fileName = name;
   state.pageCount = 1;
   q('#trOriginState', root).textContent = `${state.segments.length} segments`;
@@ -716,6 +718,7 @@ function wireRow(root, row, segment) {
 function renderList(root) {
   const list = q('#trList', root);
   if (!list) return;
+  paintSideNote(root);
   list.innerHTML = '';
   if (!state.segments.length) {
     list.append(el('div', { class: 'tr-empty' }, [
@@ -733,6 +736,20 @@ function renderList(root) {
     list.append(buildRow(root, segment));
   });
   paintListMode(root);
+  paintSideNote(root);
+}
+
+function paintSideNote(root) {
+  root.classList.toggle('has-input', state.segments.length > 0);
+  const note = q('#trSideNote', root);
+  if (!note) return;
+  if (!state.segments.length) {
+    note.textContent = 'PDF, Markdown studio, or paste';
+    return;
+  }
+  const where = state.origin === 'pdf' ? `from ${state.originLabel}` : state.origin === 'markdown' ? 'from the Markdown studio' : 'from your text';
+  const typed = state.segments.filter((segment) => segment.translated).length;
+  note.textContent = `${state.segments.length} ${state.segments.length === 1 ? 'segment' : 'segments'} ${where}${typed ? ` · ${typed} translated` : ''}`;
 }
 
 async function runOne(root, segment, row) {

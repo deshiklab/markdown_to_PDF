@@ -91,6 +91,10 @@ function paintActive(id) {
   if (meta) meta.setAttribute('content', `Folio ${LABELS[id]} — free, private tools that run in your browser.`);
 }
 
+function motionOk() {
+  return !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 function activate(id, { focus = false } = {}) {
   const next = TOOL_IDS.includes(id) ? id : 'markdown';
   state.active = next;
@@ -258,6 +262,13 @@ export function startShell({ loaders } = {}) {
   });
 
   document.addEventListener('click', (event) => {
+  const jump = event.target instanceof Element ? event.target.closest('a[href^="#"]') : null;
+  if (jump && jump.getAttribute('href') === '#how-it-works' && state.active !== 'markdown') {
+    event.preventDefault();
+    activate('markdown');
+    window.setTimeout(() => q('#how-it-works')?.scrollIntoView({ behavior: motionOk() ? 'smooth' : 'auto', block: 'start' }), 90);
+    return;
+  }
     const link = event.target.closest?.('[data-tool-link]');
     if (!link) return;
     event.preventDefault();
