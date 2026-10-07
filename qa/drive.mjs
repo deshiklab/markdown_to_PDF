@@ -426,6 +426,160 @@ async function regress() {
   say('book pdf', (await waitForDownload(snap, { seconds: 70 })) ?? 'NONE');
 }
 
+/* ----------------------------------------------------------- the pad ---- */
+/* The pad is the one place where a wrong canvas size is felt in the hand: the
+   ink has to appear under the pointer, at every width, and the panel must not
+   spill out of itself. */
+async function pad() {
+  const widths = (process.env.PAD_SIZES ?? '1600,1280,1024,900,768,600,430,390,320').split(',').map(Number);
+  // fractions of the pad box the pointer is moved to, and the same pad report
+  const draw = async (from, to) => {
+    const box = await page.$eval('#sgPad', (node) => {
+      const r = node.getBoundingClientRect();
+      return { x: r.x + node.clientLeft, y: r.y + node.clientTop, w: node.clientWidth, h: node.clientHeight };
+    });
+    const at = (p) => [box.x + box.w * p[0], box.y + box.h * p[1]];
+    const a = at(from);
+    const b = at(to);
+    await page.mouse.move(a[0], a[1]);
+    await page.mouse.down();
+    await page.mouse.move(b[0], b[1], { steps: 12 });
+    await page.mouse.up();
+    await sleep(360);
+    const ink = await page.evaluate(() => {
+      const canvas = document.querySelector('#sgPad');
+      const { data, width, height } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+      let minX = width;
+      let maxX = 0;
+      let minY = height;
+      let maxY = 0;
+      let count = 0;
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const i = (y * width + x) * 4;
+          // ink is the only saturated colour on a paper-white pad
+          if (data[i + 3] > 200 && Math.abs(data[i] - data[i + 2]) > 12) {
+            count += 1;
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      if (!count) return null;
+      return {
+        box: [canvas.clientWidth, canvas.clientHeight],
+        bitmap: [canvas.width, canvas.height],
+        from: [minX / width, minY / height],
+        to: [maxX / width, maxY / height],
+        count,
+      };
+    });
+    return { box, ink };
+  };
+  const near = (a, b) => Math.abs(a - b) * 100 < 5;
+  for (const width of widths) {
+    await page.setViewport({ width, height: 900, hasTouch: width < 700, isMobile: width < 700 });
+    await goto(page, '#/sign', 1900);
+    await page.click('[data-mode-btn="pad"]').catch(() => {});
+    await sleep(500);
+    const report = await page.evaluate(() => {
+      const panel = document.querySelector('.sg-side');
+      const canvas = document.querySelector('#sgPad');
+      const rect = (node) => (node ? (node.hidden ? 'hidden' : `${Math.round(node.getBoundingClientRect().width)}x${Math.round(node.getBoundingClientRect().height)}`) : 'MISSING');
+      const edge = panel.getBoundingClientRect();
+      const spills = [];
+      for (const node of panel.querySelectorAll('*')) {
+        const r = node.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) continue;
+        if (r.right > edge.right + 1.5 || r.left < edge.left - 1.5) spills.push(`${node.tagName.toLowerCase()}#${node.id || node.className.split(' ')[0]}@${Math.round(r.left)}-${Math.round(r.right)}`);
+      }
+      const tiny = [];
+      for (const node of panel.querySelectorAll('p,span,small,label,button')) {
+        const style = getComputedStyle(node);
+        const size = parseFloat(style.fontSize);
+        const colour = style.color.match(/\d+/g).slice(0, 3).map(Number);
+        const lum = (c) => {
+          const v = c.map((x) => x / 255).map((x) => (x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4));
+          return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+        };
+        const ratio = (0.99 + 0.05) / (lum(colour) + 0.05);
+        const filled = ['BUTTON', 'INPUT'].includes(node.tagName) || node.closest('button');
+        if (!filled && node.textContent.trim().length > 3 && (size < 9.5 || ratio < 4.4)) tiny.push(`${node.tagName.toLowerCase()}#${node.id || node.className.split(' ')[0]} ${size}px/${ratio.toFixed(1)}`);
+      }
+      return {
+        pad: rect(canvas),
+        bitmap: [canvas.width, canvas.height],
+        css: [canvas.clientWidth, canvas.clientHeight],
+        styleHeight: getComputedStyle(canvas).height,
+        dpr: window.devicePixelRatio,
+        note: rect(document.querySelector('#sgPadNote')),
+        toolbar: rect(document.querySelector('.sg-toolbar')),
+        saveRow: rect(document.querySelector('.sg-save-row')),
+        keep: rect(document.querySelector('#sgSaveMark')),
+        name: document.querySelector('#sgMarkName')?.getBoundingClientRect().width ?? 0,
+        docOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        spills: [...new Set(spills)].slice(0, 6),
+        tiny: [...new Set(tiny)].slice(0, 8),
+      };
+    });
+    await page.click('#sgClearPad').catch(() => {});
+    await sleep(160);
+    const first = await draw([0.2, 0.7], [0.8, 0.3]);
+    // a phone that re-measures itself (keyboard, rotation) must not move the ink
+    // keep the emulation flags identical — puppeteer reloads the page when
+    // isMobile changes, which would wipe the pad and look like a bug
+    await page.setViewport({ width: Math.round(width * 0.78), height: 900, hasTouch: width < 700, isMobile: width < 700 });
+    await sleep(700);
+    const after = await page.evaluate(() => {
+      const canvas = document.querySelector('#sgPad');
+      return { css: [canvas.clientWidth, canvas.clientHeight], bitmap: [canvas.width, canvas.height] };
+    });
+    const moved = await page.evaluate(() => {
+      const canvas = document.querySelector('#sgPad');
+      const { data, width, height } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+      let minX = width;
+      let maxX = 0;
+      let minY = height;
+      let maxY = 0;
+      let count = 0;
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const i = (y * width + x) * 4;
+          if (data[i + 3] > 200 && Math.abs(data[i] - data[i + 2]) > 12) {
+            count += 1;
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      return count ? { from: [minX / width, minY / height], to: [maxX / width, maxY / height], count } : null;
+    });
+    say(`${width}px`, `pad ${report.pad} css ${report.css.join('x')} bitmap ${report.bitmap.join('x')} · ink ${first.ink ? `${(first.ink.from[0] * 100).toFixed(0)}%→${(first.ink.to[0] * 100).toFixed(0)}%` : 'MISSING'} · after resize ${moved ? `${(moved.from[0] * 100).toFixed(0)}%→${(moved.to[0] * 100).toFixed(0)}%` : 'GONE'}`);
+    if (report.docOverflow > 0) flag(`${width}px: document overflows by ${report.docOverflow}px`);
+    if (report.spills.length) flag(`${width}px: pad panel spills: ${report.spills.join(' | ')}`);
+    if (report.tiny.length) flag(`${width}px: micro copy below the house floor: ${report.tiny.join(' | ')}`);
+    if (report.bitmap[0] !== report.css[0] || report.bitmap[1] !== report.css[1]) flag(`${width}px: pad bitmap ${report.bitmap.join('x')} does not match its CSS box ${report.css.join('x')} at dpr ${report.dpr} — the ink is stretched`);
+    if (!first.ink) flag(`${width}px: nothing was drawn on the pad`);
+    else {
+      const xs = [first.ink.from[0], first.ink.to[0]].sort((a, b) => a - b);
+      const ys = [first.ink.from[1], first.ink.to[1]].sort((a, b) => a - b);
+      if (!near(xs[0], 0.2) || !near(xs[1], 0.8)) flag(`${width}px: the stroke spans x ${xs.map((v) => `${Math.round(v * 100)}%`).join('→')}, the pointer went from 20% to 80%`);
+      if (!near(ys[0], 0.3) || !near(ys[1], 0.7)) flag(`${width}px: the stroke spans y ${ys.map((v) => `${Math.round(v * 100)}%`).join('→')}, the pointer went from 70% to 30%`);
+      if (first.ink.count < 300) flag(`${width}px: only ${first.ink.count} ink pixels for a full-diagonal stroke`);
+      if (!moved) flag(`${width}px: the stroke disappeared when the panel was resized`);
+      else if (!near(moved.from[0], first.ink.from[0]) || !near(moved.to[0], first.ink.to[0])) {
+        flag(`${width}px → ${Math.round(width * 0.78)}px: the ink slid from ${Math.round(first.ink.from[0] * 100)}%/${Math.round(first.ink.to[0] * 100)}% to ${Math.round(moved.from[0] * 100)}%/${Math.round(moved.to[0] * 100)}% — a resize must not move a signature`);
+      }
+      if (after.bitmap[0] !== after.css[0] || after.bitmap[1] !== after.css[1]) flag(`${width}px: after a resize the bitmap is ${after.bitmap.join('x')} for a ${after.css.join('x')} box`);
+    }
+    await page.screenshot({ path: `${SHOTS}/pad-${width}.png`, clip: { x: 0, y: 0, width, height: 900 } });
+  }
+}
+
 /* ----------------------------------------------------------------- audit ---- */
 async function audit() {
   for (const size of SIZES) {
@@ -445,6 +599,15 @@ async function audit() {
           }
           if (!node.children.length && node.textContent.trim() && node.scrollWidth - node.clientWidth > 2 && getComputedStyle(node).overflowX === 'hidden') {
             clipped.push(`CLIP:${node.tagName.toLowerCase()}.${String(node.className).split(' ')[0]} "${node.textContent.trim().slice(0, 16)}"`);
+          }
+        }
+        const nav = document.querySelector('#toolNav .tool-nav-scroll');
+        const active = document.querySelector('#toolNav [data-tool].is-active');
+        if (nav && active) {
+          const box = nav.getBoundingClientRect();
+          const card = active.getBoundingClientRect();
+          if (card.left < box.left - 1.5 || card.right > box.right + 1.5) {
+            clipped.push(`NAV:${active.dataset.tool} card ${Math.round(card.left)}-${Math.round(card.right)} is outside the strip ${Math.round(box.left)}-${Math.round(box.right)}`);
           }
         }
         return { overflow: doc.scrollWidth - doc.clientWidth, clipped: [...new Set(clipped)].slice(0, 4) };
@@ -509,12 +672,14 @@ async function touch() {
 }
 
 const isolated = {
+  pad: () => session(pad),
   sign: () => session(sign),
   touch: () => session(touch),
   finish: () => session(finish),
   regress: () => session(regress),
   audit: () => session(audit),
   all: async () => {
+    await session(pad);
     await session(sign);
     await session(touch);
     await session(finish);

@@ -66,6 +66,7 @@ const prefs = store('sign:v1', defaults);
 const markStore = store('sign:marks:v1', { marks: [] });
 
 const PAD_EXPORT_WIDTH = 1400;
+const PAD_HEIGHT = 190;
 
 const state = {
   mode: prefs.read().mode,
@@ -130,7 +131,7 @@ function layout() {
       <div class="sg-inks" id="sgInks">
         ${INKS.map((ink) => `<button type="button" class="sg-ink${form.ink === ink.value ? ' is-on' : ''}" data-ink="${ink.value}" style="--ink:${ink.value}" aria-pressed="${form.ink === ink.value}" aria-label="${ink.label} ink"><span></span></button>`).join('')}
       </div>
-      <label class="field sg-pen"><span class="field-label">Pen</span><input id="sgPen" type="range" min="1.2" max="6" step="0.2" value="${form.pen}" /></label>
+      <label class="field sg-pen"><span class="field-label">Pen</span><input class="range-input" id="sgPen" type="range" min="1.2" max="6" step="0.2" value="${form.pen}" /></label>
       <button class="button button-light" type="button" id="sgUndo">Undo</button>
       <button class="button button-light" type="button" id="sgClearPad">Clear</button>
     </div>
@@ -164,7 +165,7 @@ function layout() {
       <div class="sg-stage-panel" data-sg-panel="pad">
         <p class="lab-help">Draw with a mouse, a finger or a stylus — the stroke gets thicker when you move slowly, thinner when you flick. <strong>Keep it</strong> stores the mark in this browser only, so the next document takes one click. If you already have a scan of your signature, use <em>Use an image</em> and Folio knocks the paper out.</p>
         <div class="sg-knock">
-          <label class="field"><span class="field-label">Paper knockout for images</span><input id="sgKnock" type="range" min="0" max="250" step="2" value="${form.knock}" /></label>
+          <label class="field"><span class="field-label">Paper knockout for images</span><input class="range-input" id="sgKnock" type="range" min="0" max="250" step="2" value="${form.knock}" /></label>
           <p class="lab-hint" id="sgKnockHint">${form.knock ? `Pixels lighter than ${form.knock} go transparent.` : 'Off — the whole image is kept.'}</p>
         </div>
         <div class="sg-card" id="sgCard"></div>
@@ -377,12 +378,7 @@ function wire(root) {
   if ('ResizeObserver' in window) {
     const pad = q('#sgPad', root);
     if (pad) {
-      let lastWidth = pad.clientWidth;
-      state.observer = new window.ResizeObserver(() => {
-        if (Math.abs(pad.clientWidth - lastWidth) < 2) return;
-        lastWidth = pad.clientWidth;
-        sizePad(root);
-      });
+      state.observer = new window.ResizeObserver(() => sizePad(root));
       state.observer.observe(pad);
     }
   }
@@ -394,34 +390,50 @@ function wire(root) {
 function wirePad(root) {
   const canvas = q('#sgPad', root);
   if (!canvas) return;
+  /* Strokes are kept as fractions of the pad box, not as pixels inside it. The
+     panel is a sidebar on a desktop and full width on a phone, and a phone
+     re-measures itself when the keyboard appears: pixel coordinates recorded at
+     one width land in the wrong place at another, which the customer sees as
+     their own signature drifting — and as a stretched mark, because the export
+     re-paints the same points. Fractions survive any resize. */
+  const box = () => ({ w: canvas.clientWidth || 520, h: canvas.clientHeight || PAD_HEIGHT });
   const pointOf = (event) => {
     const rect = canvas.getBoundingClientRect();
-    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    const { w, h } = box();
+    return {
+      x: (event.clientX - rect.left - canvas.clientLeft) / w,
+      y: (event.clientY - rect.top - canvas.clientTop) / h,
+    };
   };
-  const widthAt = (previous, next, base) => {
-    if (!previous) return base;
-    const distance = Math.hypot(next.x - previous.x, next.y - previous.y);
+  /* The nib is sized in screen pixels (a fast stroke tapers), so the distance
+     that feeds it has to be measured in pixels too, not in fractions. */
+  const widthAt = (previous, next) => {
+    const { w, h } = box();
+    if (!previous) return state.form.pen;
+    const distance = Math.hypot((next.x - previous.x) * w, (next.y - previous.y) * h);
     const speed = Math.min(1, distance / 26);
-    return base * (1 - 0.45 * speed);
+    return state.form.pen * (1 - 0.45 * speed);
   };
+  const nib = (widthPx) => widthPx / box().w;
 
   canvas.addEventListener('pointerdown', (event) => {
     event.preventDefault();
     canvas.setPointerCapture?.(event.pointerId);
     state.drawing = true;
     const point = pointOf(event);
-    state.live = { ink: state.form.ink, points: [{ ...point, w: widthAt(null, point, state.form.pen) }] };
+    state.live = { ink: state.form.ink, points: [{ ...point, w: nib(widthAt(null, point)) }] };
     state.strokes.push(state.live);
     repaintPad(root);
   });
   canvas.addEventListener('pointermove', (event) => {
     if (!state.drawing || !state.live) return;
     const events = event.getCoalescedEvents?.() ?? [event];
+    const { w, h } = box();
     let previous = state.live.points[state.live.points.length - 1];
     for (const move of events) {
       const point = pointOf(move);
-      if (Math.hypot(point.x - previous.x, point.y - previous.y) < 0.8) continue;
-      const width = widthAt(previous, point, state.form.pen);
+      if (Math.hypot((point.x - previous.x) * w, (point.y - previous.y) * h) < 0.8) continue;
+      const width = nib(widthAt(previous, point));
       state.live.points.push({ ...point, w: (previous.w + width) / 2 });
       previous = state.live.points[state.live.points.length - 1];
     }
@@ -443,15 +455,20 @@ function sizePad(root) {
   const canvas = q('#sgPad', root);
   if (!canvas || !canvas.clientWidth) return;
   const ratio = window.devicePixelRatio || 1;
+  canvas.style.height = `${PAD_HEIGHT}px`;
+  // the bitmap has to cover the box inside the 1px frame, not the frame itself —
+  // a 2-pixel difference is a signature that is drawn slightly off the pen
   const width = canvas.clientWidth || 520;
-  const height = 190;
-  canvas.style.height = `${height}px`;
+  const height = canvas.clientHeight || PAD_HEIGHT;
+  if (canvas.width === Math.round(width * ratio) && canvas.height === Math.round(height * ratio)) return;
   canvas.width = Math.round(width * ratio);
   canvas.height = Math.round(height * ratio);
   repaintPad(root);
 }
 
-function paintPadStroke(context, stroke, scale) {
+/* Width and height are of the canvas being painted, so the same stroke looks
+   the same on the 1x pad and on the wide export canvas. */
+function paintPadStroke(context, stroke, width, height) {
   context.lineCap = 'round';
   context.lineJoin = 'round';
   context.strokeStyle = stroke.ink;
@@ -460,7 +477,7 @@ function paintPadStroke(context, stroke, scale) {
   if (points.length === 1) {
     context.fillStyle = stroke.ink;
     context.beginPath();
-    context.arc(points[0].x * scale, points[0].y * scale, (points[0].w * scale) / 2, 0, Math.PI * 2);
+    context.arc(points[0].x * width, points[0].y * height, (points[0].w * width) / 2, 0, Math.PI * 2);
     context.fill();
     return;
   }
@@ -468,11 +485,11 @@ function paintPadStroke(context, stroke, scale) {
     const from = points[index - 1];
     const to = points[index];
     context.beginPath();
-    context.lineWidth = Math.max(0.6, ((from.w + to.w) / 2) * scale);
-    context.moveTo(from.x * scale, from.y * scale);
+    context.lineWidth = Math.max(0.6, ((from.w + to.w) / 2) * width);
+    context.moveTo(from.x * width, from.y * height);
     const next = points[index + 1];
-    if (next) context.quadraticCurveTo(to.x * scale, to.y * scale, ((to.x + next.x) / 2) * scale, ((to.y + next.y) / 2) * scale);
-    else context.lineTo(to.x * scale, to.y * scale);
+    if (next) context.quadraticCurveTo(to.x * width, to.y * height, ((to.x + next.x) / 2) * width, ((to.y + next.y) / 2) * height);
+    else context.lineTo(to.x * width, to.y * height);
     context.stroke();
   }
 }
@@ -481,7 +498,6 @@ function repaintPad(root) {
   const canvas = q('#sgPad', root);
   if (!canvas) return;
   const context = canvas.getContext('2d');
-  const ratio = canvas.width / (canvas.clientWidth || canvas.width);
   context.save();
   context.clearRect(0, 0, canvas.width, canvas.height);
   context.fillStyle = '#fdfdf8';
@@ -495,7 +511,7 @@ function repaintPad(root) {
   context.lineTo(canvas.width * 0.94, canvas.height * 0.76);
   context.stroke();
   context.setLineDash([]);
-  for (const stroke of state.strokes) paintPadStroke(context, stroke, ratio);
+  for (const stroke of state.strokes) paintPadStroke(context, stroke, canvas.width, canvas.height);
   context.restore();
 }
 
@@ -505,12 +521,11 @@ function repaintPad(root) {
 function padMarkCanvas(root) {
   const source = q('#sgPad', root);
   if (!source || !state.strokes.length) return null;
-  const scale = PAD_EXPORT_WIDTH / (source.clientWidth || 520);
   const canvas = document.createElement('canvas');
   canvas.width = PAD_EXPORT_WIDTH;
-  canvas.height = Math.round((source.clientHeight || 190) * scale);
+  canvas.height = Math.round(PAD_EXPORT_WIDTH * ((source.clientHeight || PAD_HEIGHT) / (source.clientWidth || 520)));
   const context = canvas.getContext('2d');
-  for (const stroke of state.strokes) paintPadStroke(context, stroke, scale);
+  for (const stroke of state.strokes) paintPadStroke(context, stroke, canvas.width, canvas.height);
   return trimCanvas(canvas);
 }
 

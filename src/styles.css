@@ -255,7 +255,7 @@ textarea.text-input { height: auto; min-height: 74px; padding: 9px 10px; line-he
 .button:disabled { cursor: wait; opacity: .7; }
 .button.is-busy { pointer-events: none; }
 .panel-header-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.lab-count { color: #6a7069; font-family: var(--mono); font-size: 9px; white-space: nowrap; }
+.lab-count { color: #6a7069; font-family: var(--mono); font-size: 9.5px; white-space: nowrap; }
 
 /* ------------------------------------------------------------ tool tabs ---- */
 .tool-nav { position: sticky; z-index: 14; top: 0; margin: 0 calc(var(--page-pad) * -1) 18px; padding: 0 var(--page-pad); background: linear-gradient(#f6f5f0 76%, rgba(246, 245, 240, 0)); }
@@ -630,29 +630,28 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 .sg-shell { display: grid; grid-template-columns: minmax(0, .82fr) minmax(0, 1.18fr); gap: 18px; align-items: start; }
 .sg-side, .sg-main { min-width: 0; }
 .sg-pad-wrap { display: grid; gap: 7px; padding: 12px 14px 4px; }
-.sg-pad { width: 100%; border: 1px solid #dfe3d8; border-radius: 12px; background: #fdfdf8; touch-action: none; cursor: crosshair; }
-.sg-pad-note { margin: 0; color: #77816f; font-family: var(--mono); font-size: 9px; }
+.sg-pad { display: block; width: 100%; border: 1px solid #dfe3d8; border-radius: 12px; background: #fdfdf8; touch-action: none; cursor: crosshair; }
+.sg-pad-note { margin: 0; color: #68725f; font-family: var(--mono); font-size: 9.5px; }
 .sg-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 14px 10px; }
 .sg-inks { display: flex; gap: 5px; }
 .sg-ink { width: 24px; height: 24px; padding: 0; border: 1px solid #e6e8de; border-radius: 50%; background: #fbfbf5; cursor: pointer; display: grid; place-items: center; }
 .sg-ink > span { width: 12px; height: 12px; border-radius: 50%; background: var(--ink, #16161a); }
 .sg-ink.is-on { border-color: var(--green); box-shadow: 0 0 0 2px rgba(47, 92, 76, .16); }
 .sg-pen { flex: 0 1 150px; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; }
-.sg-pen input { width: 100%; accent-color: var(--green); }
 .sg-save-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 9px; padding: 0 14px 12px; }
 .sg-marks-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 10px 14px 6px; border-top: 1px solid #f0f0eb; }
 .sg-marks-head h4 { margin: 0; font-size: 11px; font-weight: 700; }
 .sg-marks { display: grid; gap: 8px; padding: 0 14px 16px; }
-.sg-marks-empty { margin: 0; color: #77816f; font-size: 10px; line-height: 1.6; }
+.sg-marks-empty { margin: 0; color: #68725f; font-size: 10px; line-height: 1.6; }
 .sg-mark { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid #e8eadf; border-radius: 12px; background: #fbfbf5; }
 .sg-mark-thumb { display: grid; place-items: center; height: 42px; padding: 4px 6px; border: 1px dashed #dfe3d8; border-radius: 8px; background: #fff; }
 .sg-mark-thumb img { max-width: 100%; max-height: 34px; object-fit: contain; }
 .sg-mark-body { display: grid; gap: 3px; min-width: 0; }
 .sg-mark-name { padding: 3px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; font-size: 10.5px; font-weight: 700; color: #3a463f; }
 .sg-mark-name:hover, .sg-mark-name:focus { border-color: #dfe3d8; background: #fff; outline: none; }
-.sg-mark-size { color: #8b948a; font-family: var(--mono); font-size: 9px; }
+.sg-mark-size { color: #68725f; font-family: var(--mono); font-size: 9.5px; }
 .sg-mark-actions { grid-column: 2; display: flex; gap: 6px; }
-.sg-mark-actions .button { padding: 3px 8px; font-family: var(--mono); font-size: 9px; }
+.sg-mark-actions .button { padding: 3px 8px; font-family: var(--mono); font-size: 9.5px; }
 .sg-mark-del { color: #a4564a; }
 .sg-stage-panel { display: grid; gap: 12px; }
 .sg-knock { display: grid; gap: 4px; }
@@ -678,14 +677,14 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 .sg-party { display: grid; gap: 10px; padding: 11px 12px 13px; border: 1px solid #e8eadf; border-radius: 12px; background: #fbfbf5; }
 .sg-party-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .sg-party-head strong { font-size: 11px; }
-.sg-party-tag { color: #77816f; font-family: var(--mono); font-size: 9px; }
+.sg-party-tag { color: #68725f; font-family: var(--mono); font-size: 9.5px; }
 .sg-party-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 9px; }
 .sg-party-fields .lab-pos-grid { grid-template-columns: repeat(3, 1fr); aspect-ratio: 1 / .8; }
 .sg-summary { display: grid; gap: 7px; }
 .sg-summary-row { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1fr) minmax(0, 1.2fr); gap: 4px 12px; padding: 9px 11px; border: 1px solid #ecefe5; border-radius: 11px; background: #fbfbf4; font-size: 10px; }
 .sg-summary-who { font-weight: 700; }
 .sg-summary-mark { color: #4d7a55; font-weight: 700; }
-.sg-summary-where, .sg-summary-under { color: #77816f; font-family: var(--mono); font-size: 9px; }
+.sg-summary-where, .sg-summary-under { color: #68725f; font-family: var(--mono); font-size: 9.5px; }
 .sg-summary-under { grid-column: 2 / -1; }
 .sg-summary-row.is-empty { border-style: dashed; background: transparent; }
 .sg-summary-row.is-empty .sg-summary-mark { color: #a4564a; }
@@ -827,7 +826,7 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
   .panel-header-actions { flex: 0 0 auto; }
   .panel-index { width: 26px; height: 26px; flex-basis: 26px; border-radius: 8px; font-size: 9px; }
   .panel-title-group h3 { font-size: 11px; }
-  .panel-title-group p { font-size: 9px; }
+  .panel-title-group p { font-size: 9.5px; }
   .editor-toolbar { position: sticky; top: 0; z-index: 3; overflow-x: auto; gap: 1px; height: auto; min-height: 40px; padding: 4px 8px; scrollbar-width: none; }
   .editor-toolbar::-webkit-scrollbar { display: none; }
   .format-button { flex: 0 0 auto; width: 34px; height: 32px; }

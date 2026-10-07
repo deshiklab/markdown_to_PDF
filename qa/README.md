@@ -33,6 +33,8 @@ The harness picks up `/tmp/al2023/lib` (or `qa/.chromium-lib`) automatically.
 
 | Step | What it proves |
 | --- | --- |
+| `pad` | The pad's geometry at nine widths: the canvas bitmap matches the CSS box inside its 1 px frame, a stroke lands where the pointer went, and a panel that re-measures itself (a rotate, an on-screen keyboard, a breakpoint) neither drops the ink nor slides it — coordinates are stored as fractions, so the saved mark matches what was drawn |
+| `touch` | A 390 px phone with `hasTouch`: draw with touch pointer events, save the mark, place it, drag a 70 px handle by tap, and download the signed file |
 | `sign` | Drawing on the pad saves a cropped PNG, the library survives a reload, a placed mark lands where the overlay showed it (measured by diffing the rendered page before and after signing), `/Rotate 90` pages are honoured, captions reach the text layer, and *Flatten* really removes the page's text |
 | `finish` | Fields read back and are written without clobbering the author, `{page} of {total}` footers land on the pages, redaction finds terms across text runs and destroys characters only when flattening is on, and the digest round-trips |
 | `regress` | Every other tab still exports: studio PDF, merge, watermark, split ZIP, translation exports, photos → PDF, the photo book |

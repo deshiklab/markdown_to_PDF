@@ -60,6 +60,27 @@ function currentHashId() {
   return TOOL_IDS.includes(id) ? id : 'markdown';
 }
 
+function keepActiveTabVisible(scroller = q('#toolNav .tool-nav-scroll'), smooth = true) {
+  const tab = tabs().find((node) => node.classList.contains('is-active'));
+  if (!scroller || !tab) return;
+  /* The strip fades its last 14px away and the active card is the one the
+     customer is standing on, so it has to sit fully inside — on load, after a
+     rotate, and after the web font re-measures every card. Cards carry
+     `scroll-snap-align: center`, so the centred position is the one the
+     browser leaves alone: aim for it rather than the minimum nudge, or the
+     snap slides the card back out of view. Client rects, not offsetLeft — the
+     tabs' offset parent is the scroller only by accident — and the container
+     scrolls, never `scrollIntoView`, so the page itself does not jump. */
+  const edge = 14;
+  const box = scroller.getBoundingClientRect();
+  const card = tab.getBoundingClientRect();
+  if (card.left >= box.left + edge && card.right <= box.right - edge) return;
+  const limit = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+  const target = Math.max(0, Math.min(scroller.scrollLeft + (card.left + card.width / 2) - (box.left + box.width / 2), limit));
+  if (Math.abs(target - scroller.scrollLeft) < 1) return;
+  scroller.scrollTo({ left: target, behavior: motionOk() && smooth ? 'smooth' : 'auto' });
+}
+
 function tabs() {
   return qa('#toolNav [data-tool]');
 }
@@ -74,15 +95,13 @@ function paintActive(id) {
       tab.classList.toggle('is-active', isActive);
       tab.setAttribute('aria-selected', String(isActive));
       tab.tabIndex = isActive ? 0 : -1;
-      if (isActive) {
-        tab.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
-      }
     }
     if (panel) {
       panel.hidden = !isActive;
       panel.classList.toggle('is-active', isActive);
     }
   }
+  keepActiveTabVisible();
   const intro = INTRO[id] ?? INTRO.markdown;
   const introBlock = q('.intro');
   if (introBlock && introBlock.dataset.tool !== id) {
@@ -276,7 +295,12 @@ export function startShell({ loaders } = {}) {
   if (scroller) {
     updateNavEdges(scroller);
     scroller.addEventListener('scroll', () => updateNavEdges(scroller), { passive: true });
-    window.addEventListener('resize', () => updateNavEdges(scroller), { passive: true });
+    window.addEventListener('resize', () => {
+      updateNavEdges(scroller);
+      keepActiveTabVisible(scroller, false);
+    }, { passive: true });
+    // the web font lands after first paint and re-measures every card
+    document.fonts?.ready.then(() => keepActiveTabVisible(scroller, false));
   }
 
   window.addEventListener('hashchange', () => {
