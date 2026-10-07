@@ -701,6 +701,9 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 @media (max-width: 600px) {
   .sg-toolbar { gap: 6px; }
   .sg-pen { flex: 1 1 130px; }
+  /* the pen row wraps to two lines on a phone: keep Undo and Clear on the
+     right of whichever line they land on, so the toolbar reads as one block */
+  .sg-toolbar #sgUndo { margin-left: auto; }
   .sg-mark { grid-template-columns: 62px minmax(0, 1fr); }
   .sg-stage { padding: 8px; }
 }
