@@ -30,6 +30,7 @@ const tools = {
   translate: () => import('./tools/translate.js'),
   convert: () => import('./tools/convert.js'),
   portfolio: () => import('./tools/portfolio.js'),
+  finish: () => import('./tools/finish.js'),
 };
 
 window.startFolioApp({

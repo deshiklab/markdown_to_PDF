@@ -305,9 +305,8 @@ async function handleFiles(files, root) {
       }
     }
     if (!pdfs.length) toast('That tab wants a .pdf file.', true);
-    renderPdf(root);
+    paintMode(root);
     paintSnippet(root);
-    estimateOut(root);
     return;
   }
   const images = files.filter((file) => /^image\//.test(file.type) || /\.(jpe?g|png|webp|gif|bmp|avif)$/i.test(file.name));
@@ -337,8 +336,7 @@ async function handleFiles(files, root) {
     }
   }
   if (!images.length) toast('That tab wants image files.', true);
-  renderImages(root);
-  estimateImages(root);
+  paintMode(root);
   paintShrinkList(root);
 }
 
@@ -422,8 +420,8 @@ function renderImages(root) {
         URL.revokeObjectURL(image.url);
         state.images.splice(index, 1);
       }
-      renderImages(root);
-      estimateImages(root);
+      paintMode(root);
+      paintShrinkList(root);
     });
     item.addEventListener('dragstart', (event) => {
       event.dataTransfer.effectAllowed = 'move';

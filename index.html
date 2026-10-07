@@ -73,6 +73,10 @@
                 <span class="tool-tab-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="13" height="10" rx="1.3"/><circle cx="7.4" cy="8.7" r="1"/><path d="m5 13 3.2-3 2.2 2 2.4-2.4 3.2 3"/></svg></span>
                 <span class="tool-tab-text"><strong>Photo Portfolio</strong><small>Frames into a PDF book</small></span>
               </button>
+              <button class="tool-tab" type="button" role="tab" id="tab-finish" aria-controls="panel-finish" aria-selected="false" tabindex="-1" data-tool="finish">
+                <span class="tool-tab-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h9M4 9h6M4 12.5h4"/><path d="m12.6 14.4 1.7 1.7 3.4-3.7" /></svg></span>
+                <span class="tool-tab-text"><strong>Finish</strong><small>Fields, numbers, redact</small></span>
+              </button>
             </div>
           </div>
         </nav>
@@ -235,6 +239,9 @@
           <section class="tool-panel" id="panel-portfolio" role="tabpanel" aria-labelledby="tab-portfolio" tabindex="-1" hidden>
             <div class="tool-loading"><span class="tool-loading-dot"></span> Setting up the studio…</div>
           </section>
+          <section class="tool-panel" id="panel-finish" role="tabpanel" aria-labelledby="tab-finish" tabindex="-1" hidden>
+            <div class="tool-loading"><span class="tool-loading-dot"></span> Polishing the finishing tools…</div>
+          </section>
         </div>
 
         <section class="how-section" id="how-it-works" aria-labelledby="how-title">
@@ -263,9 +270,9 @@
     <noscript><p class="local-setup-notice">Folio runs on JavaScript — enable it, or open the Markdown studio in a browser with scripting allowed.</p></noscript>
     <script type="module">
       const IDEAS = [
-        { title: 'PDF checksum + redaction', note: 'Hash a file for proof of delivery, then black out lines you never meant to share.', tag: 'next' },
+        { title: 'Sign and countersign', note: 'Draw a signature, place it on the dotted line, export a signed-looking copy.', tag: 'next' },
         { title: 'Batch rename & merge', note: 'Feed Folio a folder: it names each PDF from its title page and stitches them in order.', tag: 'next' },
-        { title: 'Signature pad', note: 'Draw a signature, place it on the dotted line, export a signed-looking copy.', tag: 'soon' },
+        { title: 'Bookmarks & links', note: 'Read a PDF outline, split by bookmark, or rewrite the links inside it.', tag: 'soon' },
         { title: 'OCR for scans', note: 'Wire in Tesseract.js so photographed pages become searchable text.', tag: 'soon' },
         { title: 'Exif studio', note: 'Strip or write camera metadata before a portfolio goes public.', tag: 'soon' },
         { title: 'Print dialog sheet', note: 'Bleed, crop marks and imposition presets for real print shops.', tag: 'idea' },

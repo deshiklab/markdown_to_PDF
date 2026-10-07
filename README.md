@@ -1,6 +1,6 @@
 # Folio — Markdown to PDF, and friends
 
-A small, private, browser-based document studio. Write Markdown and export it as a PDF, stitch PDFs together, translate a document line by line, turn a folder of photos into a printed-looking portfolio, and swap between photos, pages and text. Every tool runs in the browser: no upload, no account, no server round-trip.
+A small, private, browser-based document studio. Write Markdown and export it as a PDF, stitch PDFs together, translate a document line by line, turn a folder of photos into a printed-looking portfolio, swap between photos, pages and text, and give a document its last pass before it goes out. Every tool runs in the browser: no upload, no account, no server round-trip.
 
 ## What is in it
 
@@ -11,6 +11,7 @@ A small, private, browser-based document studio. Write Markdown and export it as
 | **Translate PDF** | Pull text out page by page, translate each segment live into a bilingual editor, keep the source visible, export a translated PDF or Markdown | `pdf.js` for extraction, `pdf-lib` + html2pdf for output, one network call for the translation itself |
 | **Converter** | Photos → PDF (page size, fit, margin, quality), PDF → Markdown text, PDF → PNG/JPEG images, and a "shrink images" pass that keeps filenames | canvas + `pdf-lib` + `fflate` for ZIPs |
 | **Photo Portfolio** | A photo book with cover, plates, colophon and page numbers — six layouts, five paper sizes, three tones, caption and numbering switches, then export as a PDF book | canvas compositing + html2pdf |
+| **Finish** | One file, four small jobs: read and rewrite the document fields (title, author, subject, keywords, creator, dates), stamp `{page}`/`{total}` footers with placement, size, margin and range, black out terms — optionally flattening the page so the characters really are gone — and take or verify a SHA-2/SHA-3 checksum with a sidecar `.sum` file | `pdf-lib` for the writing, `pdf.js` for the text layer and the live preview, `crypto.subtle` for the digest |
 
 Tabs load on demand, so the editor stays fast and only the tool you open pulls in its library. `src/shell.js` owns the tab strip, hash routing (`#/pdf-lab`), keyboard roving focus, the panel switcher on phones, and a per-tab intro line; each tool is a module that exports `start(root)`.
 
@@ -46,7 +47,7 @@ Files never leave the browser: parsing, thumbnails, rasterising, ZIPs and PDF wr
 - **Self-hosted LibreTranslate** — paste your own server URL and optional API key; nothing goes anywhere else.
 - **No translation service** — extract the lines and type each translation yourself. Nothing is sent anywhere, and the preview, downloads and PDF export keep working as you type.
 
-Useful to know: PDFs written by PDF Lab and Converter keep the text layer of your source pages. The Translate and Portfolio tabs lay text on the page with PDF standard fonts, which cover Latin script — for Bengali, Arabic, CJK and friends, the translation is fully visible in the bilingual **two-column PDF** and in the Markdown export, and non-Latin source pages still come through as images in **Show original** mode.
+Useful to know: PDFs written by PDF Lab and Converter keep the text layer of your source pages. The Translate and Portfolio tabs lay text on the page with PDF standard fonts, which cover Latin script — for Bengali, Arabic, CJK and friends, the translation is fully visible in the bilingual **two-column PDF** and in the Markdown export, and non-Latin source pages still come through as images in **Show original** mode. Finish paints an opaque layer over redacted words, which hides them but does not remove them — tick **Flatten page to image** when the text itself has to go.
 
 ## Notes for development
 
@@ -60,7 +61,7 @@ Useful to know: PDFs written by PDF Lab and Converter keep the text layer of you
 The layout was audited in a real browser from `320px` to `1600px`:
 
 - One shared `--page-pad` gutter token keeps full-bleed elements (the tab strip, panel edges) inside the viewport, so nothing triggers sideways scroll; `overflow-x: clip` is the safety net, not the mechanism.
-- The tab strip is a scrollable, masked list with prev/next arrows on wider screens and snap on touch; `←`/`→`/`Home`/`End` move between tabs, and on phones the same five tabs become a big tap target switcher above the panel.
+- The tab strip is a scrollable, masked list with prev/next arrows on wider screens and snap on touch; `←`/`→`/`Home`/`End` move between tabs, and on phones the same six tabs become a big tap target switcher above the panel.
 - Studio panels are side-by-side from `1120px` up, and switch to two full-height tabs (Editor / Preview) below `900px`.
 - Every tool uses auto-fit grids, so file lists, photo grids, watermarks and controls reflow at 1, 2, 3 and 4 columns without breakpoint soup.
 - Touch: `pointer: coarse` grows icon buttons to 34px, always shows hover-only actions, hides the file-type chip line, and pins the toast above the safe area.
@@ -71,4 +72,6 @@ The layout was audited in a real browser from `320px` to `1600px`:
 
 ## More tools on the bench
 
-Rough notes for what comes next, also listed at the bottom of the page: PDF checksum + redaction, batch rename & merge, signature pad, OCR for scans (Tesseract.js), Exif studio, print dialog sheet with bleed and crop marks, zine maker, invoice & letterhead, page-number and footer stamps, watermark removal, extract selected pages, PDF metadata editor, compress and flatten, DPI presets, split by bookmarks, and a canvas for signing or annotating.
+Rough notes for what comes next, also listed at the bottom of the page: **sign and countersign** (a pad you can drag onto a page, then export a signed-looking file), **batch rename & merge** (a folder of files named `01 - Title.pdf` becomes one book in order), **bookmarks & links** (read a PDF's outline, split by it, rewrite the links inside), **OCR for scans** (Tesseract.js, so photographed pages become searchable text), **Exif studio**, a **print dialog sheet** with bleed and crop marks, a **zine maker**, and **invoice & letterhead** templates.
+
+Shipped from that list already: the PDF metadata editor, page-number and footer stamps, and PDF checksum + redaction — they are the four panels of the Finish tab. Still open from the older notes: watermark removal, extract selected pages, compress and flatten, DPI presets.

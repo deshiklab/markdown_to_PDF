@@ -2,20 +2,21 @@
    ARIA-correct keyboard navigation, and the mobile editor/preview switch. */
 import { el, q, qa, store } from './lib.js';
 
-const TOOL_IDS = ['markdown', 'pdf-lab', 'translate', 'convert', 'portfolio'];
+const TOOL_IDS = ['markdown', 'pdf-lab', 'translate', 'convert', 'portfolio', 'finish'];
 const LABELS = {
   markdown: 'Markdown to PDF',
   'pdf-lab': 'PDF Lab',
   translate: 'Translate PDF',
   convert: 'Converter',
   portfolio: 'Photo Portfolio',
+  finish: 'Finish',
 };
 
 const INTRO = {
   markdown: {
-    eyebrow: 'Five tools, one page',
+    eyebrow: 'Six tools, one page',
     title: 'Markdown, meet<br /><em>your best side.</em>',
-    note: 'Write a document, wrangle a PDF, translate a page, convert a stack of photos, or lay out a portfolio — all in this tab, with nothing uploaded.',
+    note: 'Write a document, wrangle a PDF, translate a page, convert a stack of photos, lay out a portfolio, or put the finishing touches on — all in this tab, with nothing uploaded.',
   },
   'pdf-lab': {
     eyebrow: 'PDF Lab',
@@ -36,6 +37,11 @@ const INTRO = {
     eyebrow: 'Photo portfolio',
     title: 'A folder of frames,<br /><em>a book worth printing.</em>',
     note: 'Choose a layout and a paper size and Folio sets your photographs into cover, plates and colophon — then exports it as one PDF.',
+  },
+  finish: {
+    eyebrow: 'Finish',
+    title: 'The last pass<br /><em>before it goes out.</em>',
+    note: 'Set the document fields, stamp page numbers where a footer belongs, black out what must not be read, and take a checksum of the exact bytes you are sending.',
   },
 };
 
