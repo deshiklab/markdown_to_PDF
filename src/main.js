@@ -31,6 +31,7 @@ const tools = {
   convert: () => import('./tools/convert.js'),
   portfolio: () => import('./tools/portfolio.js'),
   finish: () => import('./tools/finish.js'),
+  sign: () => import('./tools/sign.js'),
 };
 
 window.startFolioApp({

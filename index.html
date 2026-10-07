@@ -77,6 +77,10 @@
                 <span class="tool-tab-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h9M4 9h6M4 12.5h4"/><path d="m12.6 14.4 1.7 1.7 3.4-3.7" /></svg></span>
                 <span class="tool-tab-text"><strong>Finish</strong><small>Fields, numbers, redact</small></span>
               </button>
+              <button class="tool-tab" type="button" role="tab" id="tab-sign" aria-controls="panel-sign" aria-selected="false" tabindex="-1" data-tool="sign">
+                <span class="tool-tab-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 14.4c2.5-6.4 4.2 3.3 6.5-1.7 1.4-3.2 2.3 2.8 5-.9"/></svg></span>
+                <span class="tool-tab-text"><strong>Sign</strong><small>Draw, place, countersign</small></span>
+              </button>
             </div>
           </div>
         </nav>
@@ -242,6 +246,9 @@
           <section class="tool-panel" id="panel-finish" role="tabpanel" aria-labelledby="tab-finish" tabindex="-1" hidden>
             <div class="tool-loading"><span class="tool-loading-dot"></span> Polishing the finishing tools…</div>
           </section>
+          <section class="tool-panel" id="panel-sign" role="tabpanel" aria-labelledby="tab-sign" tabindex="-1" hidden>
+            <div class="tool-loading"><span class="tool-loading-dot"></span> Warming the ink…</div>
+          </section>
         </div>
 
         <section class="how-section" id="how-it-works" aria-labelledby="how-title">
@@ -270,7 +277,7 @@
     <noscript><p class="local-setup-notice">Folio runs on JavaScript — enable it, or open the Markdown studio in a browser with scripting allowed.</p></noscript>
     <script type="module">
       const IDEAS = [
-        { title: 'Sign and countersign', note: 'Draw a signature, place it on the dotted line, export a signed-looking copy.', tag: 'next' },
+        { title: 'Form fields & answers', note: 'Fill a PDF’s fields and flatten the answers into the page — no reader required.', tag: 'next' },
         { title: 'Batch rename & merge', note: 'Feed Folio a folder: it names each PDF from its title page and stitches them in order.', tag: 'next' },
         { title: 'Bookmarks & links', note: 'Read a PDF outline, split by bookmark, or rewrite the links inside it.', tag: 'soon' },
         { title: 'OCR for scans', note: 'Wire in Tesseract.js so photographed pages become searchable text.', tag: 'soon' },

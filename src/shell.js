@@ -2,7 +2,7 @@
    ARIA-correct keyboard navigation, and the mobile editor/preview switch. */
 import { el, q, qa, store } from './lib.js';
 
-const TOOL_IDS = ['markdown', 'pdf-lab', 'translate', 'convert', 'portfolio', 'finish'];
+const TOOL_IDS = ['markdown', 'pdf-lab', 'translate', 'convert', 'portfolio', 'finish', 'sign'];
 const LABELS = {
   markdown: 'Markdown to PDF',
   'pdf-lab': 'PDF Lab',
@@ -10,13 +10,14 @@ const LABELS = {
   convert: 'Converter',
   portfolio: 'Photo Portfolio',
   finish: 'Finish',
+  sign: 'Sign',
 };
 
 const INTRO = {
   markdown: {
-    eyebrow: 'Six tools, one page',
+    eyebrow: 'Seven tools, one page',
     title: 'Markdown, meet<br /><em>your best side.</em>',
-    note: 'Write a document, wrangle a PDF, translate a page, convert a stack of photos, lay out a portfolio, or put the finishing touches on — all in this tab, with nothing uploaded.',
+    note: 'Write a document, wrangle a PDF, translate a page, convert a stack of photos, lay out a portfolio, put the finishing touches on, or sign it — all in this tab, with nothing uploaded.',
   },
   'pdf-lab': {
     eyebrow: 'PDF Lab',
@@ -42,6 +43,11 @@ const INTRO = {
     eyebrow: 'Finish',
     title: 'The last pass<br /><em>before it goes out.</em>',
     note: 'Set the document fields, stamp page numbers where a footer belongs, black out what must not be read, and take a checksum of the exact bytes you are sending.',
+  },
+  sign: {
+    eyebrow: 'Sign',
+    title: 'Put your name<br /><em>on the line.</em>',
+    note: 'Draw a signature once, keep it in this browser, then place it on the dotted line with a name, a title and a date under it — the second pad is for whoever is countersigning.',
   },
 };
 
