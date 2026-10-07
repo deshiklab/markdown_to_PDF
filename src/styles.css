@@ -347,8 +347,10 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 .pg-cell .text-input { min-width: 116px; }
 .pg-cell .field-label, .pg-num span, .pg-scale .field-label { margin-bottom: 3px; color: var(--muted); font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; }
 .pg-cell-nums { flex: 0 1 auto; }
-.pg-seg-row { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
-.pg-seg { padding: 7px 10px; border: 0; border-left: 1px solid var(--line); background: var(--paper-bg); color: var(--muted); font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
+/* nowrap + wrap: a squeezed row must put a label on the next line, never cut
+   "JUSTIFY" down to "JU" inside the rounded frame */
+.pg-seg-row { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.pg-seg { padding: 7px 10px; border: 0; border-left: 1px solid var(--line); white-space: nowrap; background: var(--paper-bg); color: var(--muted); font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
 .pg-seg:first-child { border-left: 0; }
 .pg-seg.is-on { background: var(--green); color: #fdfcf8; }
 .pg-seg:hover:not(.is-on) { background: #f2f4ec; }
@@ -585,6 +587,9 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 .tr-type-scope { color: #68725f; font-family: var(--mono); font-size: 9.5px; }
 .tr-type-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(142px, 1fr)); gap: 10px 14px; }
 .tr-type-grid .field { min-width: 0; }
+/* the alignment row is four labels wide: give it two grid cells so it stays on
+   one line whenever the bar has room, instead of wrapping mid-control */
+.tr-type-grid .field:has(#trAlign), .tr-type-grid .field:has(#trBlockAlign) { grid-column: span 2; }
 .tr-blockpanel { border-top: 1px dashed #e6e8dd; padding-top: 10px; }
 .tr-blockpanel[hidden] { display: none; }
 .tr-blockpanel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }

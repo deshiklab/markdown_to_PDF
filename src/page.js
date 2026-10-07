@@ -140,8 +140,10 @@ export function sheetPx(next = settings) {
 
 export function toUnit(mm, unit = settings.unit) {
   const u = UNITS[unit] ?? UNITS.mm;
-  const stepped = Math.round((mm * u.factor) / u.step) * u.step;
-  return +stepped.toFixed(u.digits);
+  /* Round to the unit's digits, never to its step: the number that comes back
+     out of these boxes is written straight into the store, so snapping a 9 mm
+     gutter to the nearest sixteenth of an inch would quietly make it 9.5. */
+  return +(Number(mm) * u.factor).toFixed(u.digits);
 }
 
 export function fromUnit(value, unit = settings.unit) {
@@ -306,8 +308,13 @@ function paintInputs(host, next = page()) {
   for (const node of qa('[data-orientation]', host)) node.classList.toggle('is-on', node.dataset.orientation === next.orientation), (node.ariaPressed = String(node.dataset.orientation === next.orientation));
   const readout = q('#pgReadout', host);
   if (readout) readout.textContent = readoutText(next);
+  /* both labels follow the unit the reader chose — a box of inches under a
+     caption that says millimetres is how a margin gets set wrong */
+  const unit = (UNITS[next.unit] ?? UNITS.mm).label;
+  const numsLabel = q('.pg-cell-nums .field-label', host);
+  if (numsLabel) numsLabel.textContent = `Per side (${unit})`;
   const summary = q('#pgToggleNote', host);
-  if (summary) summary.textContent = `${sheetMm(next).label} · ${marginsMm(next).top}mm margin · ${next.scale === 100 ? 'actual size' : `${next.scale}%`}`;
+  if (summary) summary.textContent = `${sheetMm(next).label} · ${toUnit(marginsMm(next).top, next.unit)}${unit} margin · ${next.scale === 100 ? 'actual size' : `${next.scale}%`}`;
   const nums = q('.pg-nums', host);
   if (nums) nums.dataset.step = String((UNITS[next.unit] ?? UNITS.mm).step);
 }
