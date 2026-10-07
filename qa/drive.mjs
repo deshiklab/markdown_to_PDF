@@ -1,13 +1,18 @@
 /* Folio QA driver.
+     node qa/drive.mjs frame     — the shared page setup: strip, previews, @page, page boxes
+     node qa/drive.mjs trfmt     — Translate: extraction, page-faithful export, re-typeset
      node qa/drive.mjs sign      — the Sign tab, end to end, with PDF checks
      node qa/drive.mjs finish    — the Finish tab, end to end
      node qa/drive.mjs regress   — every other tab: does the main button still export?
+     node qa/drive.mjs pad       — the signature pad: ink under the pointer at nine widths
+     node qa/drive.mjs touch     — phone gestures and tap targets
      node qa/drive.mjs audit     — geometry sweep over tabs x viewports (overflow + clipping)
      node qa/drive.mjs all       — all of the above
    Fixtures are generated on the fly; a dev server must be listening on
    FOLIO_URL (default http://127.0.0.1:5173/). */
 import { createRequire } from 'node:module';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { inflateSync } from 'node:zlib';
 import { DOWNLOADS, SHOTS, flag, files, feed, fixture, goto, open, report, say, sleep, snapshot, text, type, value, waitForDownload } from './lib.mjs';
 import { makeFixtures } from './fixtures.mjs';
 
@@ -139,6 +144,8 @@ async function sign() {
   say('marks at start', await text(page, '#sgMarkCount'));
 
   // draw a signature: a crossing flourish, in the pad's own coordinate space
+  await page.$eval('#sgPad', (node) => node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }));
+  await sleep(240);
   const box = await page.$eval('#sgPad', (node) => {
     const rect = node.getBoundingClientRect();
     return { x: rect.x, y: rect.y, w: rect.width, h: rect.height };
@@ -195,6 +202,7 @@ async function sign() {
   await page.click('[data-pos="b:bottom-left"]');
   await sleep(700);
   const geo = await page.evaluate(() => {
+    document.querySelector('#sgPaper')?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
     const paper = document.querySelector('#sgPaper').getBoundingClientRect();
     const read = (key) => {
       const node = document.querySelector(`.sg-handle[data-handle="${key}"]`);
@@ -434,6 +442,8 @@ async function pad() {
   const widths = (process.env.PAD_SIZES ?? '1600,1280,1024,900,768,600,430,390,320').split(',').map(Number);
   // fractions of the pad box the pointer is moved to, and the same pad report
   const draw = async (from, to) => {
+    await page.$eval('#sgPad', (node) => node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }));
+    await sleep(220);
     const box = await page.$eval('#sgPad', (node) => {
       const r = node.getBoundingClientRect();
       return { x: r.x + node.clientLeft, y: r.y + node.clientTop, w: node.clientWidth, h: node.clientHeight };
@@ -581,6 +591,492 @@ async function pad() {
 }
 
 /* ----------------------------------------------------------------- audit ---- */
+/* ------------------------------------------------------------- translate ---- */
+/* The two promises of this tab: a page-faithful version that keeps the original
+   layout, and a re-typeset version you can style. Both are checked against the
+   bytes of the PDF that comes out, not just the pixels on screen. */
+async function trfmt() {
+  await goto(page, '#/translate', 1600);
+  await feed(page, '#trPdfDrop', ['alpha.pdf']);
+  await sleep(3800);
+  const blocks = Number((await text(page, '#trOriginState')).match(/(\d+)/)?.[1] ?? 0);
+  say('blocks extracted', `${blocks} from alpha.pdf · ${await text(page, '#trPreviewWhere')}`);
+  if (blocks < 10) flag(`only ${blocks} blocks came out of a 3-page fixture — extraction looks broken`);
+
+  await page.select('#trProvider', 'manual');
+  await sleep(250);
+  await page.click('#trRun');
+  await sleep(1100);
+  const ready = await page.$$eval('.tr-row.is-ready', (nodes) => nodes.length);
+  say('manual pass', `${ready} rows waiting for a translation`);
+  if (ready !== blocks) flag(`${ready} rows ready out of ${blocks} blocks`);
+
+  const boxes = await page.$$('.tr-row textarea');
+  const typed = ['Sunset over the harbour', 'সূর্যাস্ত বন্দরের উপরে', 'Patient Zero signed the ACME Corp agreement on 12 March 1999.'];
+  for (let index = 0; index < typed.length; index += 1) {
+    await boxes[index].click();
+    await boxes[index].type(typed[index]);
+    await sleep(260);
+  }
+  await sleep(700);
+  say('overlay preview', await text(page, '#trPreviewNote'));
+
+  const overlay = await page.evaluate(() => {
+    const canvas = document.querySelector('#trOverlay');
+    const sheet = document.querySelector('.tr-sheet');
+    return {
+      visible: !canvas.hidden,
+      ratio: +(canvas.width / canvas.height).toFixed(3),
+      sheetPad: getComputedStyle(sheet).padding,
+      page: sheet.dataset.pageSize,
+    };
+  });
+  say('overlay canvas', `visible ${overlay.visible} · ratio ${overlay.ratio} (A4 is 0.707) · sheet ${overlay.page} padding ${overlay.sheetPad}`);
+  if (!overlay.visible) flag('the overlay canvas never showed — the page-faithful preview is not painting');
+  if (Math.abs(overlay.ratio - 595 / 842) > 0.02) flag(`overlay canvas ratio ${overlay.ratio} is not the source page's`);
+  if (!/^0px($| )/.test(overlay.sheetPad)) flag(`the overlay sheet has ${overlay.sheetPad} of padding — the page must sit flush`);
+
+  let before = snapshot();
+  await page.evaluate(() => document.querySelector('#trPdf').click());
+  const faithful = await waitForDownload(before, { seconds: 90 });
+  say('page-faithful export', faithful ?? 'NONE');
+  if (!faithful) flag('the overlay export produced no file');
+
+  if (faithful) {
+    const info = await pdfInfo(`${DOWNLOADS}/${faithful}`);
+    const streams = await pageStreams(`${DOWNLOADS}/${faithful}`);
+    const white = (streams.match(/1 1 1 rg/g) ?? []).length;
+    const prints = (streams.match(/\bTj\b|\bTJ\b/g) ?? []).length;
+    say('exported content', `${info.pages} pages · ${info.sizes[0]}pt · images on p1 ${info.pageInfo[0].images} · white fills ${white} · text runs ${prints}`);
+    if (white < 3) flag(`only ${white} white fills in the page stream — the source text may not have been boxed out`);
+    if (info.pageInfo[0].images < 1) flag('the non-Latin translation was not drawn as a picture');
+    const placed = info.pageInfo[0].words.includes('Sunset over the harbour') || info.pageInfo[0].words.includes('Sunset');
+    say('translation in the text layer', placed ? 'yes — selectable, and the picture carries the Bengali' : 'not found as one run');
+    if (!placed) flag('the Latin translation is not in the exported text layer');
+    const firstPage = await pdfItems(`${DOWNLOADS}/${faithful}`, 1);
+    const heading = firstPage.find((item) => item.str.includes('Sunset'));
+    if (heading) {
+      say('drawn at', `x ${heading.x} y ${heading.y} · ${heading.size}pt (source heading sat at x 56 y 760 · 18pt and had to shrink)`);
+      if (Math.abs(heading.x - 56) > 2) flag(`the translation landed at x ${heading.x}, the source line starts at 56`);
+      if (heading.size > 18.01) flag(`the translation was set at ${heading.size}pt — bigger than the source line it replaces`);
+    } else {
+      flag('could not find the translated heading in the exported page');
+    }
+    if (!info.pageInfo[0].words.includes('Signed at')) flag('the cover step took the untouched lines with it');
+  }
+
+  /* the same strip reaches the Converter: a photo page inset by the margins */
+  await goto(page, '#/convert', 1500);
+  await feed(page, '#cvDrop', ['wide.png']);
+  await sleep(2400);
+  const offsets = {};
+  for (const mode of ['none', 'strip']) {
+    await page.select('#cvMargin', mode);
+    await sleep(320);
+    const snap = snapshot();
+    await page.evaluate(() => document.querySelector('#cvImagesGo').click());
+    const file = await waitForDownload(snap, { seconds: 60 });
+    offsets[mode] = file ? await imageOrigin(`${DOWNLOADS}/${file}`) : null;
+    if (file) rmSync(`${DOWNLOADS}/${file}`, { force: true });
+  }
+  say('photo margins', `none → x ${offsets.none} · from the strip → x ${offsets.strip}`);
+  if (Math.abs(offsets.none ?? 0) > 0.5) flag(`with no margin the photo should sit at x 0, not ${offsets.none}`);
+  if (!(offsets.strip > 8)) flag(`"from the page strip" put the photo at x ${offsets.strip} — the margins did not reach the Converter`);
+  await goto(page, '#/translate', 1800);
+
+  /* keep the original and print the translation beside it */
+  await page.select('#trOriginal', 'keep');
+  await sleep(700);
+  before = snapshot();
+  await page.evaluate(() => document.querySelector('#trPdf').click());
+  const sideBySide = await waitForDownload(before, { seconds: 90 });
+  say('side-by-side export', sideBySide ?? 'NONE');
+  if (sideBySide) {
+    const info = await pdfInfo(`${DOWNLOADS}/${sideBySide}`);
+    const firstPage = await pdfItems(`${DOWNLOADS}/${sideBySide}`, 1);
+    const hasOriginal = firstPage.some((item) => item.str.includes('The quick brown fox'));
+    const translationPage = await pdfItems(`${DOWNLOADS}/${sideBySide}`, 2);
+    const hasTranslation = translationPage.some((item) => item.str.includes('Sunset'));
+    say('side-by-side pages', `${info.pages} · original still on page 1: ${hasOriginal} · translation on page 2: ${hasTranslation}`);
+    if (!hasOriginal) flag('the original text is gone even though "kept" was chosen');
+    if (!hasTranslation) flag('the translation is not on the page after the original');
+  }
+  await page.select('#trOriginal', 'cover');
+  await sleep(400);
+
+  /* re-typeset, with document typography and one block overruled */
+  await page.click('[data-fidelity="retype"]');
+  await sleep(1200);
+  const retyped = await page.evaluate(() => ({
+    blocks: document.querySelectorAll('#trPaper .tr-block').length,
+    headings: document.querySelectorAll('#trPaper h2.tr-block').length,
+    selected: document.querySelectorAll('#trPaper .is-selected').length,
+  }));
+  say('re-typeset blocks', `${retyped.blocks} blocks · ${retyped.headings} headings`);
+  if (retyped.blocks !== blocks) flag(`re-typeset shows ${retyped.blocks} blocks, extraction found ${blocks}`);
+
+  await page.evaluate(() => {
+    document.querySelectorAll('#trPaper .tr-block')[1]?.click();
+  });
+  await sleep(300);
+  await page.click('#trBlockStyle [data-style="quote"]');
+  await page.click('#trBlockAlign [data-align="right"]');
+  await page.evaluate(() => {
+    const node = document.querySelector('#trBlockSize');
+    node.value = '15';
+    node.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.select('#trFamily', 'georgia');
+  await page.evaluate(() => {
+    const set = (id, value) => {
+      const node = document.querySelector(id);
+      node.value = String(value);
+      node.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    set('#trSize', 13);
+    set('#trIndent', 14);
+  });
+  await sleep(900);
+  const styles = await page.evaluate(() => {
+    const sheet = document.querySelector('.tr-sheet');
+    const list = [...document.querySelectorAll('#trPaper .tr-block')];
+    const heading = list[0];
+    const styled = list[1];
+    return {
+      family: getComputedStyle(sheet).fontFamily.split(',')[0],
+      headingSize: parseFloat(getComputedStyle(heading).fontSize),
+      bodySize: parseFloat(getComputedStyle(list[2]).fontSize),
+      firstIndent: parseFloat(getComputedStyle(heading).textIndent),
+      styledTag: styled?.tagName,
+      styledSize: styled ? parseFloat(getComputedStyle(styled).fontSize) : null,
+      styledAlign: styled ? getComputedStyle(styled).textAlign : null,
+      overrides: JSON.parse(localStorage.getItem('folio:translate:v2')).blockOverrides,
+    };
+  });
+  const bodyPx = 13 * (96 / 72);
+  say('typography', `${styles.family} · heading ${styles.headingSize}px · body ${styles.bodySize}px (asked for ${bodyPx.toFixed(1)}) · indent ${styles.firstIndent}px · styled block ${styles.styledTag}/${styles.styledSize}/${styles.styledAlign}`);
+  if (!/georgia/i.test(styles.family)) flag(`typeface did not follow the control (${styles.family})`);
+  if (Math.abs(styles.bodySize - bodyPx) > 1.5) flag(`document size did not follow the control (${styles.bodySize}px, wanted ${bodyPx.toFixed(1)})`);
+  if (styles.headingSize <= styles.bodySize) flag('the source hierarchy was lost — the heading is not bigger than the body');
+  if (styles.firstIndent < 15) flag(`first-line indent did not apply (${styles.firstIndent}px)`);
+  if (styles.styledAlign !== 'right') flag(`the per-block alignment was not applied (${styles.styledAlign})`);
+  if (styles.styledSize === styles.bodySize) flag('the per-block size did not take');
+  if (!styles.overrides || Object.keys(styles.overrides).length !== 1) flag(`expected exactly one block override, got ${JSON.stringify(styles.overrides)}`);
+
+  before = snapshot();
+  await page.evaluate(() => document.querySelector('#trPdf').click());
+  const restyled = await waitForDownload(before, { seconds: 90 });
+  say('re-typeset export', restyled ?? 'NONE');
+  if (restyled) {
+    const info = await pdfInfo(`${DOWNLOADS}/${restyled}`);
+    const page = info.pageInfo[0];
+    say('re-typeset page', `${info.sizes[0]}pt · ${info.pages} pages · ${page.words.length} chars of text · ${page.images} images`);
+    // the re-typeset route is html2canvas + jsPDF, so the page arrives as a
+    // picture (same as the Markdown studio's download) — check the geometry
+    if (page.images < 1) flag('the re-typeset PDF has no page image — it did not render');
+    const [w, h] = info.sizes[0].split('x').map(Number);
+    if (Math.abs(w - 595) > 3 || Math.abs(h - 842) > 3) flag(`the re-typeset page is ${info.sizes[0]}pt, not the A4 sheet the strip asked for`);
+    const streams = await pageStreams(`${DOWNLOADS}/${restyled}`);
+    if (/1 1 1 rg/.test(streams)) flag('the re-typeset sheet is drawing the source boxes as well as the page (two exports mixed together)');
+  }
+
+  /* printing from this tab, with the shared page setup */
+  await page.evaluate(() => {
+    window.__prints = 0;
+    window.print = () => { window.__prints += 1; };
+  });
+  await page.click('#panel-translate [data-print-go]');
+  await sleep(400);
+  const printed = await page.evaluate(() => ({ calls: window.__prints, tool: document.body.dataset.printTool }));
+  say('print from translate', `${printed.calls}× · print tool “${printed.tool}”`);
+  if (printed.calls !== 1 || printed.tool !== 'translate') flag(`translate printed ${printed.calls} times with tool “${printed.tool}”`);
+}
+
+/** The top-left of the first image drawn on page one, in points. */
+async function imageOrigin(path) {
+  const pdfjs = require('pdfjs-dist/legacy/build/pdf.mjs');
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(path)), isEvalSupported: false, verbosity: 0 }).promise;
+  const viewPage = await doc.getPage(1);
+  const ops = await viewPage.getOperatorList();
+  let x = 0;
+  let seen = false;
+  for (let i = 0; i < ops.fnArray.length; i += 1) {
+    if (ops.fnArray[i] === pdfjs.OPS.paintImageXObject) break;
+    if (ops.fnArray[i] === pdfjs.OPS.transform) {
+      const [, , , , e, f] = ops.argsArray[i];
+      x += e;
+      seen = seen || Math.abs(e) > 0 || Math.abs(f) > 0;
+    }
+  }
+  await doc.destroy();
+  return seen ? +x.toFixed(1) : 0;
+}
+
+/** The inflated content streams of a PDF, straight from the file. */
+async function pageStreams(path) {
+  const raw = readFileSync(path);
+  const text = raw.toString('latin1');
+  const chunks = [];
+  let index = 0;
+  while (true) {
+    const start = text.indexOf('stream', index);
+    if (start === -1) break;
+    const end = text.indexOf('endstream', start);
+    if (end === -1) break;
+    let from = start + 6;
+    while (from < end && [10, 13, 32].includes(raw[from])) from += 1; // a stream may open with a newline
+    const body = raw.subarray(from, end);
+    try {
+      chunks.push(inflateSync(Buffer.from(body)).toString('latin1'));
+    } catch {
+      /* not a deflate stream — skip it */
+    }
+    index = end + 9;
+  }
+  return chunks.join('\n');
+}
+
+/** Text items on a page, with the position pdf.js reports. */
+async function pdfItems(path, pageNumber) {
+  const pdfjs = require('pdfjs-dist/legacy/build/pdf.mjs');
+  const bytes = readFileSync(path);
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, verbosity: 0 }).promise;
+  const viewPage = await doc.getPage(pageNumber);
+  const content = await viewPage.getTextContent();
+  const items = content.items.filter((item) => 'str' in item && item.str.trim()).map((item) => ({
+    str: item.str,
+    x: +item.transform[4].toFixed(1),
+    y: +item.transform[5].toFixed(1),
+    size: +Math.hypot(item.transform[2], item.transform[3]).toFixed(2),
+  }));
+  await doc.destroy();
+  return items;
+}
+
+/* --------------------------------------------------------------- frame ---- */
+/* The strip is meant to be one sheet for every tab: set it here, read it back
+   from the previews, and make sure the studio's own controls still agree. Then
+   the same numbers go through the printer and through PDF Lab's frame & trim,
+   where they have to change the actual page. */
+async function frame() {
+  await goto(page, '#/markdown', 1400);
+
+  const stripState = () => page.evaluate(() => {
+    const strip = document.querySelector('#pageStrip');
+    return {
+      collapsed: strip.classList.contains('is-collapsed'),
+      sheet: strip.querySelector('#pgSheet').value,
+      preset: strip.querySelector('#pgPreset').value,
+      unit: strip.querySelector('[data-unit].is-on')?.dataset.unit,
+      readout: strip.querySelector('#pgReadout').textContent,
+      values: [...strip.querySelectorAll('input[data-side]')].map((n) => `${n.dataset.side}=${n.value}`).join(' '),
+    };
+  });
+
+  if ((await stripState()).collapsed) {
+    await page.click('#pgToggle');
+    await sleep(320);
+  }
+  await page.select('#pgSheet', 'a5');
+  await page.select('#pgPreset', 'book');
+  await sleep(420);
+  const book = await stripState();
+  say('strip preset', `${book.sheet} · ${book.preset} · ${book.unit} · ${book.values}`);
+  say('strip readout', book.readout);
+
+  const studio = await page.evaluate(() => {
+    const paper = document.querySelector('#paper');
+    const padding = getComputedStyle(paper).padding;
+    const computed = padding.split(' ').map((v) => Math.round(parseFloat(v)));
+    return {
+      paperSize: paper.dataset.pageSize,
+      studioPaper: document.querySelector('#paperSelect').value,
+      studioMargin: document.querySelector('#marginSelect').value,
+      status: document.querySelector('#paperStatus').textContent,
+      padding: computed.join('/'),
+      sides: {
+        left: computed[3],
+        right: computed[1],
+        top: computed[0],
+        bottom: computed[2],
+      },
+    };
+  });
+  say('studio followed', `${studio.paperSize} = ${studio.studioPaper} · ${studio.studioMargin} · ${studio.status}`);
+  // measured against the numbers in the strip right now, gutter included
+  const live = await stripState();
+  const num = (key) => Number(live.values.match(new RegExp(`${key}=([\\d.]+)`))?.[1] ?? NaN);
+  const mmToPx = 96 / 25.4;
+  const wantLeft = (num('left') + num('gutter')) * mmToPx;
+  const wantTop = num('top') * mmToPx;
+  if (Math.abs(studio.sides.top - wantTop) > 1.5) flag(`studio sheet top padding ${studio.sides.top}px, expected ${wantTop.toFixed(0)}px`);
+  if (Math.abs(studio.sides.left - wantLeft) > 1.5) flag(`studio sheet left padding ${studio.sides.left}px, expected ${wantLeft.toFixed(0)}px (gutter included)`);
+  if (studio.padding.split('/').some((value) => value === 'NaN')) flag('studio sheet padding did not parse — the sheet has no margin');
+
+  // per-side edit + units + mirror, then a fresh tab reads the same numbers back
+  await page.evaluate(() => {
+    const set = (side, value) => {
+      const node = document.querySelector(`#pageStrip input[data-side="${side}"]`);
+      node.value = String(value);
+      node.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    set('top', 24); set('bottom', 30);
+  });
+  await page.click('#pageStrip [data-unit="in"]');
+  await sleep(420);
+  const inches = await stripState();
+  const topIn = Number(inches.values.match(/top=([\d.]+)/)?.[1]);
+  if (Math.abs(topIn - 24 / 25.4) > 0.02) flag(`unit switch lost the value: ${topIn}in is not 24mm`);
+  say('unit switch', `${topIn}in · preset ${inches.preset}`);
+  if (inches.preset !== 'custom') flag('editing a side should mark the preset custom');
+
+  await goto(page, '#/translate', 1400);
+  const carried = await page.evaluate(() => {
+    const strip = document.querySelector('#pageStrip');
+    return {
+      sheet: strip.querySelector('#pgSheet').value,
+      top: strip.querySelector('input[data-side="top"]').value,
+      unit: strip.querySelector('[data-unit].is-on')?.dataset.unit,
+      paperPad: getComputedStyle(document.querySelector('.tr-sheet')).padding || '0px',
+    };
+  });
+  say('carried to translate', `${carried.sheet} · top ${carried.top}${carried.unit ?? ''} · sheet padding ${carried.paperPad}`);
+  if (carried.sheet !== 'a5') flag(`Translate did not inherit the paper size (${carried.sheet})`);
+
+  const sheetPixels = await page.evaluate(() => {
+    const sheet = document.querySelector('.tr-sheet');
+    return { w: Math.round(sheet.offsetWidth), h: Math.round(sheet.offsetHeight) };
+  });
+  const a5 = { w: 148 * (96 / 25.4), h: 210 * (96 / 25.4) };
+  if (Math.abs(sheetPixels.w - a5.w) > 6 || Math.abs(sheetPixels.h - a5.h) > 8) {
+    flag(`preview sheet is ${sheetPixels.w}x${sheetPixels.h}px, an A5 page is ${Math.round(a5.w)}x${Math.round(a5.h)}px`);
+  } else {
+    say('preview sheet', `${sheetPixels.w}x${sheetPixels.h}px = A5 at 96dpi`);
+  }
+
+  // the printer gets @page, so every sheet keeps the margin (not just page one)
+  await goto(page, '#/markdown', 1400);
+  const printed = await page.evaluate(() => {
+    window.__prints = 0;
+    window.print = () => { window.__prints += 1; };
+    document.body.dataset.printTool = '';
+    document.querySelector('#exportButton').scrollIntoView({ block: 'center' });
+    return window.folioPage.readoutText();
+  });
+  await page.click('#printButton');
+  await sleep(400);
+  const printState = await page.evaluate(() => ({
+    calls: window.__prints,
+    tool: document.body.dataset.printTool,
+    style: document.querySelector('#folioPageStyle')?.textContent ?? '',
+  }));
+  say('print called', `${printState.calls}× with print tool “${printState.tool}” from ${printed}`);
+  if (printState.calls !== 1) flag(`Print button called window.print ${printState.calls} times`);
+  if (!/@page \{ size: 148mm 210mm/.test(printState.style)) flag(`@page did not take the A5 sheet: ${printState.style.slice(0, 120)}`);
+  if (!/@page \{[^}]*margin: 2[0-9.]+mm/.test(printState.style)) flag(`@page did not take the margins: ${printState.style.slice(0, 160)}`);
+  const printedPdf = await page.pdf({ printBackground: true, preferCSSPageSize: true });
+  writeFileSync(`${DOWNLOADS}/print-${Date.now()}.pdf`, printedPdf);
+  await sleep(300);
+  const printedFile = files().find((name) => name.startsWith('print-'));
+  if (printedFile) {
+    const info = await pdfInfo(`${DOWNLOADS}/${printedFile}`);
+    const page = info.pageInfo[0];
+    const size = info.sizes[0];
+    const marginPx = 24 * (96 / 25.4) * 0.75;
+    const firstY = Number(page?.words ? 0 : 0);
+    void firstY;
+    say('print geometry', `${size}pt · ${info.pages} pages · text on page 1: ${page?.words.length ?? 0} chars`);
+    const [px, py] = size.split('x').map(Number);
+    if (Math.abs(px - 420) > 2 || Math.abs(py - 595) > 2) flag(`printed page is ${size}pt, A5 is 420x595pt`);
+    const topItem = await page.marginProbe?.();
+    void topItem;
+    void marginPx;
+    // the margin has to repeat: page two's first line starts inside the sheet too
+    const second = await pdfTopLine(`${DOWNLOADS}/${printedFile}`, 2);
+    const first = await pdfTopLine(`${DOWNLOADS}/${printedFile}`, 1);
+    say('top line (pt from the top)', `page 1 ${first} · page 2 ${second}`);
+    if (first && first < 45) flag(`page 1 starts ${first}pt from the top — the 24mm margin did not apply`);
+    if (second && second < 45) flag(`page 2 starts ${second}pt from the top — the margin did not repeat on the next sheet`);
+  } else {
+    flag('the printed PDF never landed in the downloads folder');
+  }
+
+  // frame & trim: the file's own page box has to change, and stay text
+  await goto(page, '#/pdf-lab', 1600);
+  await feed(page, '#labDrop', ['alpha.pdf']);
+  await sleep(2600);
+  await page.click('[data-mode-btn="margins"]');
+  await sleep(500);
+  await page.evaluate(() => {
+    const set = (id, value) => {
+      const node = document.querySelector(id);
+      node.value = String(value);
+      node.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    document.querySelector('[data-margin-unit="mm"]').click();
+    set('#labMarginTop', 10); set('#labMarginRight', 0); set('#labMarginBottom', 0); set('#labMarginLeft', 20);
+  });
+  await sleep(500);
+  say('frame hint', await text(page, '#labMarginHint'));
+  let before = snapshot();
+  await page.click('#labMarginGo');
+  const framed = await waitForDownload(before, { seconds: 60 });
+  say('framed file', framed ?? 'NONE');
+  if (framed) {
+    const info = await pdfInfo(`${DOWNLOADS}/${framed}`);
+    say('framed geometry', `${info.sizes.slice(0, 2).join(' | ')} · ${info.pageCount ?? info.pages} pages`);
+    const [w, h] = info.sizes[0].split('x').map(Number);
+    // 20mm on the left, 10mm along the top: 56.7pt and 28.3pt
+    if (Math.abs(w - 651.7) > 4 || Math.abs(h - 870.3) > 4) flag(`framed page is ${info.sizes[0]}pt, 652x870 expected (20mm left, 10mm top)`);
+    const words = info.pageInfo[0].words.length;
+    if (words < 100) flag(`framed page lost its text (${words} chars) — it should stay selectable`);
+    else say('framed text', `${words} characters still selectable`);
+  }
+
+  await page.evaluate(() => {
+    const set = (id, value) => {
+      const node = document.querySelector(id);
+      node.value = String(value);
+      node.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    const radio = document.querySelector('[name="marginAction"][value="trim"]');
+    radio.checked = true;
+    radio.dispatchEvent(new Event('change', { bubbles: true }));
+    document.querySelector('#labMarginCopy').click();
+    set('#labMarginTop', 30); set('#labMarginRight', 30); set('#labMarginBottom', 30); set('#labMarginLeft', 30);
+  });
+  await sleep(600);
+  say('trim hint', await text(page, '#labMarginHint'));
+  before = snapshot();
+  await page.click('#labMarginGo');
+  const trimmed = await waitForDownload(before, { seconds: 60 });
+  say('trimmed file', trimmed ?? 'NONE');
+  if (trimmed) {
+    const info = await pdfInfo(`${DOWNLOADS}/${trimmed}`);
+    say('trimmed geometry', `${info.sizes.slice(0, 2).join(' | ')}`);
+    const [w, h] = info.sizes[0].split('x').map(Number);
+    if (Math.abs(w - 425) > 4 || Math.abs(h - 672) > 4) flag(`trimmed page is ${info.sizes[0]}pt, 425x672 expected (30mm off each edge)`);
+  }
+}
+
+/** How far the first line of text sits from the top of a printed page. */
+async function pdfTopLine(path, pageNumber) {
+  const pdfjs = require('pdfjs-dist/legacy/build/pdf.mjs');
+  const bytes = readFileSync(path);
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, verbosity: 0 }).promise;
+  const viewPage = await doc.getPage(pageNumber);
+  const content = await viewPage.getTextContent();
+  const views = viewPage.getViewport({ scale: 1 });
+  let top = null;
+  for (const item of content.items) {
+    if (!('str' in item) || !item.str.trim()) continue;
+    const y = views.height - item.transform[5];
+    top = top === null ? y : Math.min(top, y);
+  }
+  await doc.destroy();
+  return top === null ? null : +top.toFixed(1);
+}
+
 async function audit() {
   for (const size of SIZES) {
     const [w, h] = size.split('x').map(Number);
@@ -672,6 +1168,8 @@ async function touch() {
 }
 
 const isolated = {
+  frame: () => session(frame),
+  trfmt: () => session(trfmt),
   pad: () => session(pad),
   sign: () => session(sign),
   touch: () => session(touch),
@@ -679,6 +1177,8 @@ const isolated = {
   regress: () => session(regress),
   audit: () => session(audit),
   all: async () => {
+    await session(frame);
+    await session(trfmt);
     await session(pad);
     await session(sign);
     await session(touch);

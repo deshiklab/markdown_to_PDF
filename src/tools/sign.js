@@ -16,6 +16,7 @@ import {
   store,
   toast,
 } from '../lib.js';
+import { printButton } from '../page.js';
 
 const MODES = [
   { id: 'pad', label: 'Draw the mark', note: 'Pad, ink, saved signatures' },
@@ -154,7 +155,7 @@ function layout() {
         <span class="panel-index panel-index-green">02</span>
         <div><h3 id="sg-main-title">On the dotted line</h3><p><span class="live-dot"></span> Nothing is uploaded — you download a new file</p></div>
       </div>
-      <div class="panel-header-actions"><span class="lab-count" id="sgStat">no file</span></div>
+      <div class="panel-header-actions">${printButton()}<span class="lab-count" id="sgStat">no file</span></div>
     </div>
 
     <div class="lab-modes" role="group" aria-label="Sign mode">
@@ -186,7 +187,7 @@ function layout() {
             <label class="field sg-page-field"><span class="field-label">Preview page</span><input class="text-input" id="sgPreviewPage" type="number" min="1" step="1" value="${form.previewPage}" /></label>
             <p class="lab-hint" id="sgStageHint">Drag a mark to move it. Arrow keys nudge, <kbd>Shift</kbd> + arrows move further.</p>
           </div>
-          <div class="sg-stage" id="sgStage">
+          <div class="sg-stage" id="sgStage" data-print-root>
             <div class="sg-paper" id="sgPaper">
               <canvas id="sgCanvas" aria-label="The page you are signing, with the signature blocks on it"></canvas>
               <button type="button" class="sg-handle" data-handle="a" hidden aria-label="Your signature — drag to move"><img alt="" /></button>
@@ -448,7 +449,9 @@ function wirePad(root) {
   };
   canvas.addEventListener('pointerup', stop);
   canvas.addEventListener('pointercancel', stop);
-  canvas.addEventListener('pointerleave', stop);
+  /* No pointerleave: the pointer is captured, and a flourish that overshoots the
+     edge of the pad (or a page that scrolls under the pointer) should come back
+     rather than end the stroke mid-letter. */
 }
 
 function sizePad(root) {

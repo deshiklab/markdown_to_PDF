@@ -1,6 +1,7 @@
 /* Tab controller for the Folio suite: hash routing, lazy tool mounting,
    ARIA-correct keyboard navigation, and the mobile editor/preview switch. */
 import { el, q, qa, store } from './lib.js';
+import { mountControls, printSheet } from './page.js';
 
 const TOOL_IDS = ['markdown', 'pdf-lab', 'translate', 'convert', 'portfolio', 'finish', 'sign'];
 const LABELS = {
@@ -291,6 +292,21 @@ export function startShell({ loaders } = {}) {
   wireKeyboard(loaders);
   setupPanelSwitcher();
 
+  /* The sheet is shared by every tab, so its controls sit outside them — one
+     strip under the tab bar, in step with whatever is on screen below. */
+  const strip = q('#pageStrip');
+  if (strip) {
+    strip.hidden = false;
+    mountControls(strip);
+    // the tab bar and the strip both stick, so the strip needs to know how tall
+    // the bar is or it would slide over it
+    const nav = q('#toolNav');
+    const paintOffset = () => document.documentElement.style.setProperty('--nav-h', `${nav?.offsetHeight ?? 86}px`);
+    paintOffset();
+    window.addEventListener('resize', paintOffset, { passive: true });
+    document.fonts?.ready.then(paintOffset);
+  }
+
   const scroller = q('#toolNav .tool-nav-scroll');
   if (scroller) {
     updateNavEdges(scroller);
@@ -306,6 +322,17 @@ export function startShell({ loaders } = {}) {
   window.addEventListener('hashchange', () => {
     const id = activate(currentHashId());
     if (id !== 'markdown') mountTool(id, loaders);
+  });
+
+  /* Every tool carries its own Print button; all of them print the sheet the
+     page setup describes, whichever tab is standing. */
+  document.addEventListener('click', (event) => {
+    const print = event.target instanceof Element ? event.target.closest('[data-print-go]') : null;
+    if (print) {
+      event.preventDefault();
+      printSheet();
+      return;
+    }
   });
 
   document.addEventListener('click', (event) => {

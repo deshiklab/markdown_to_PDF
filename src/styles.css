@@ -147,6 +147,17 @@ kbd { display: inline-grid; place-items: center; min-width: 19px; height: 19px; 
 .preview-live-label { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: #666f62; font-family: var(--mono); font-size: 8px; letter-spacing: .5px; }
 .preview-live-label > span { width: 5px; height: 5px; border-radius: 50%; background: #89ac73; }
 .preview-stage { display: flex; justify-content: center; align-items: flex-start; flex: 1 0 auto; min-height: 545px; max-height: min(80vh, 900px); padding: 23px 20px; overflow: auto; overscroll-behavior: contain; background-color: #f0f0e9; background-image: radial-gradient(#d9ddd2 .72px, transparent .72px); background-size: 12px 12px; }
+.paper[data-page-size="a4"] { --pg-w: 210mm; --pg-h: 297mm; }
+.paper[data-page-size="letter"] { --pg-w: 215.9mm; --pg-h: 279.4mm; }
+.paper[data-page-size="legal"] { --pg-w: 215.9mm; --pg-h: 355.6mm; }
+.paper[data-page-size="a5"] { --pg-w: 148mm; --pg-h: 210mm; }
+.paper[data-page-size="a3"] { --pg-w: 297mm; --pg-h: 420mm; }
+.paper[data-page-size="postcard"] { --pg-w: 152.4mm; --pg-h: 101.6mm; }
+/* The sheet is the page, so it takes its width from the paper rather than from
+   whatever box it is sitting in (a scaler that measures the sheet must not also
+   size it, or the two chase each other down to nothing). */
+.paper[data-page-size] { width: var(--pg-w); max-width: 100%; min-height: var(--pg-h); padding: var(--pg-pad, 16mm 14mm); }
+.paper[data-page-size][data-orientation="landscape"] { width: var(--pg-h); max-width: 100%; min-height: var(--pg-w); }
 .paper { width: 100%; max-width: 860px; min-height: 700px; padding: 51px 55px 66px; overflow: hidden; color: #303d35; background: var(--paper-bg); box-shadow: 0 3px 10px rgba(41, 46, 35, .08), 0 16px 32px rgba(41, 46, 35, .07); transition: padding .2s, color .2s, background .2s; }
 .paper[data-margin="compact"] { padding: 37px 41px 50px; }
 .paper[data-margin="wide"] { padding: 69px 67px 80px; }
@@ -313,6 +324,67 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 .tool-notice.is-error { border-color: #e7cfc7; background: #fdf5f2; }
 .tool-notice .button { justify-self: start; margin-top: 4px; }
 
+/* ------------------------------------------------------- page & print ---- */
+/* One strip under the tab bar carrying the sheet every tab shares. Collapsed on
+   a narrow screen it is a single line: what paper, and the Print button. */
+.page-strip { position: sticky; top: var(--nav-h, 86px); z-index: 30; margin: 12px 0 0; border: 1px solid var(--line); border-radius: 12px; background: rgba(252, 251, 247, .97); box-shadow: 0 1px 0 rgba(41, 46, 35, .03), 0 8px 20px rgba(41, 46, 35, .05); backdrop-filter: blur(6px); }
+.page-strip[hidden] { display: none; }
+.pg-inner { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 14px; padding: 10px 14px; }
+.pg-toggle { display: inline-flex; align-items: center; gap: 8px; align-self: center; padding: 5px 7px; border: 0; border-radius: 8px; background: none; color: var(--ink); font: inherit; cursor: pointer; text-align: left; }
+.pg-toggle:hover { background: rgba(82, 116, 83, .07); }
+.pg-toggle svg { width: 17px; height: 17px; flex: none; color: var(--green); }
+.pg-toggle strong { font-size: 12.5px; font-weight: 600; }
+.pg-toggle small { color: #68725f; font-family: var(--mono); font-size: 9.5px; letter-spacing: .03em; }
+.page-strip:not(.is-collapsed) .pg-toggle small { display: none; }
+.page-strip.is-collapsed .pg-fields, .page-strip.is-collapsed .pg-readout { display: none; }
+/* On a short screen the strip would eat a fifth of the window while it sticks,
+   so there it simply scrols with the page like any other bar. */
+@media (max-height: 780px) {
+  .page-strip { position: static; }
+}
+.pg-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 14px; flex: 1 1 auto; min-width: 0; }
+.pg-cell { flex: none; min-width: 0; }
+.pg-cell .text-input { min-width: 116px; }
+.pg-cell .field-label, .pg-num span, .pg-scale .field-label { margin-bottom: 3px; color: var(--muted); font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; }
+.pg-cell-nums { flex: 0 1 auto; }
+.pg-seg-row { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.pg-seg { padding: 7px 10px; border: 0; border-left: 1px solid var(--line); background: var(--paper-bg); color: var(--muted); font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
+.pg-seg:first-child { border-left: 0; }
+.pg-seg.is-on { background: var(--green); color: #fdfcf8; }
+.pg-seg:hover:not(.is-on) { background: #f2f4ec; }
+.pg-nums { display: inline-flex; flex-wrap: wrap; align-items: flex-end; gap: 7px; }
+.pg-num { display: inline-flex; flex-direction: column; flex: 0 0 auto; }
+.pg-num input { width: 62px; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper-bg); color: var(--ink); font: inherit; font-size: 11.5px; }
+.pg-switch { flex: none; }
+.pg-scale { flex: 0 1 150px; min-width: 130px; }
+.pg-scale input { width: 100%; }
+.pg-scale output { color: var(--green); font-family: var(--mono); font-size: 9.5px; }
+.pg-print { flex: none; margin-left: auto; align-self: center; }
+.pg-readout { flex: 1 1 100%; color: #68725f; font-family: var(--mono); font-size: 9.5px; letter-spacing: .04em; }
+
+/* Narrow windows: the strip is the first thing to run out of room, so the
+   numbers take a line of their own and the fields shrink before they spill. */
+@media (max-width: 900px) {
+  .page-strip { margin-top: 10px; }
+  .pg-toggle small { display: inline; }
+  .pg-num input { width: 54px; }
+  .pg-cell .text-input { min-width: 104px; }
+  .pg-print { margin-left: 0; }
+}
+@media (max-width: 620px) {
+  /* On a phone the open strip is a two-column board — full width fields one
+     after another would be a wall of controls over the panel below. */
+  .pg-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 10px; flex: 1 1 100%; max-height: 52vh; overflow-y: auto; }
+  .pg-cell-nums, .pg-scale { grid-column: 1 / -1; }
+  .pg-cell .text-input { width: 100%; min-width: 0; }
+  .pg-nums { justify-content: space-between; }
+  .pg-num input { width: 100%; min-width: 0; }
+  .pg-num { flex: 1 1 0; min-width: 0; }
+  .pg-switch { align-self: center; }
+  .pg-print { grid-column: 1 / -1; margin-left: 0; justify-content: center; }
+}
+
+
 /* --------------------------------------------------------- shared shell ---- */
 .lab-shell, .tr-shell, .cv-shell, .pf-shell { display: grid; grid-template-columns: minmax(0, .74fr) minmax(0, 1.26fr); gap: 17px; align-items: start; }
 .tr-shell { grid-template-columns: minmax(0, .66fr) minmax(0, 1.34fr); }
@@ -372,6 +444,8 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 .lab-hint { margin: 0; color: #656f63; font-family: var(--mono); font-size: 9.5px; line-height: 1.5; }
 .lab-hint.is-error { color: #a4564a; }
 .lab-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.lab-row-margins { align-items: flex-end; }
+.lab-row-margins .text-input-narrow { width: 78px; }
 .lab-row-sliders { align-items: flex-start; }
 .lab-row-sliders .field { flex: 1 1 150px; }
 .lab-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 2px; padding-top: 12px; border-top: 1px solid #f0f0eb; }
@@ -477,7 +551,44 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 .tr-preview { grid-column: 1 / -1; }
 .tr-preview-stage { display: flex; justify-content: center; align-items: flex-start; padding: 16px 14px; overflow: auto; background-color: #f0f0e9; background-image: radial-gradient(#d9ddd2 .72px, transparent .72px); background-size: 12px 12px; max-height: min(74vh, 780px); }
 .tr-preview-stage.is-hidden { display: none; }
-.tr-preview .paper { min-height: 0; width: 100%; max-width: 560px; padding: 34px 34px 40px; }
+/* The preview sheet is a real page from the shared setup, scaled to fit. */
+.tr-scaler { position: relative; }
+.tr-zoom { transform-origin: top left; }
+.tr-preview .tr-sheet .document-content { font-size: var(--tr-size, 16px); line-height: var(--tr-lead, 1.5); text-align: var(--tr-align, left); }
+.tr-preview .tr-sheet .document-content > .tr-block { margin: 0 0 var(--tr-gap, 13px); text-indent: var(--tr-indent, 0); }
+.tr-preview .tr-sheet .document-content > .tr-block:last-child { margin-bottom: 0; }
+.tr-block { position: relative; border-radius: 3px; cursor: pointer; }
+.tr-block:hover { outline: 1px dashed rgba(82, 116, 83, .45); outline-offset: 3px; }
+.tr-block.is-selected { outline: 1.5px solid #527453; outline-offset: 3px; background: rgba(82, 116, 83, .05); }
+.tr-block.is-untranslated { color: #6d736a; }
+.tr-block-heading { font-size: calc(var(--tr-size, 16px) * 1.45); font-weight: 600; line-height: 1.2; }
+.tr-block-quote { padding-left: 14px; border-left: 2px solid var(--doc-rule); color: var(--doc-heading); font-style: italic; }
+.tr-block-list .tr-bullet { color: var(--doc-accent); }
+.tr-block .tr-pair { margin: 0; }
+.tr-sheet.is-overlay { width: max-content; max-width: none; min-height: 0; padding: 0; }
+.tr-zoom { width: max-content; }
+.tr-overlay-canvas { display: block; border-radius: 2px; }
+.tr-page-nav { display: inline-flex; align-items: center; gap: 4px; }
+.tr-page-nav .button { padding: 0 6px; font-size: 13px; }
+.tr-fidelity { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; padding: 12px 16px; border-bottom: 1px solid #f0f0eb; background: #f8f9f3; }
+.tr-fidelity .field { flex: 0 1 auto; }
+.tr-fidelity .text-input { min-width: 150px; }
+.tr-fidelity .tr-overlay-only.is-off { opacity: .45; }
+.tr-hint { margin: 0; padding: 9px 16px 11px; border-bottom: 1px solid #f0f0eb; color: #666c63; font-size: 9.5px; line-height: 1.6; background: #f8f9f3; }
+.tr-fidelity-note { padding: 12px 14px 0; }
+.tr-row-pick { display: grid; place-items: center; width: 22px; height: 22px; align-self: center; border: 1px solid #e4e7dc; border-radius: 6px; color: #6c7668; background: #fbfcf8; cursor: pointer; }
+.tr-row-pick svg { width: 13px; height: 13px; }
+.tr-row-pick:hover { border-color: #b9c9b4; color: #46664a; }
+.tr-row.is-selected { border-color: var(--green); box-shadow: 0 0 0 2px rgba(82, 116, 83, .1); }
+.tr-type { display: grid; gap: 10px; padding: 13px 16px 16px; border-top: 1px solid #f0f0eb; background: #fdfdfa; }
+.tr-type-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.tr-type-scope { color: #68725f; font-family: var(--mono); font-size: 9.5px; }
+.tr-type-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(142px, 1fr)); gap: 10px 14px; }
+.tr-type-grid .field { min-width: 0; }
+.tr-blockpanel { border-top: 1px dashed #e6e8dd; padding-top: 10px; }
+.tr-blockpanel[hidden] { display: none; }
+.tr-blockpanel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.tr-blockpanel-grid { display: flex; flex-wrap: wrap; gap: 10px 16px; margin-top: 8px; }
 .tr-doc-page { font-size: 11px !important; letter-spacing: 1px !important; text-transform: uppercase; opacity: .7; }
 .tr-pair { display: grid; gap: 6px; margin: 0 0 15px; padding: 11px 13px; border-left: 2px solid var(--doc-rule); background: var(--doc-soft); }
 .tr-pair-target { color: var(--doc-heading); font-size: 12.5px; line-height: 1.65; }
@@ -727,8 +838,12 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 
 @media (min-width: 1500px) {
   .app-shell { width: min(100% - (var(--page-pad) * 2), 1460px); }
-  .tr-shell { grid-template-columns: minmax(0, .56fr) minmax(0, 1.08fr) minmax(0, .82fr); }
-  .tr-shell > .tr-preview { grid-column: auto; grid-row: 1; }
+  /* three across: sources, blocks, then the sheet — placed explicitly, since an
+     item with only a definite row jumps the queue and lands in column one */
+  .tr-shell { grid-template-columns: minmax(0, .56fr) minmax(0, 1.04fr) minmax(0, .88fr); }
+  .tr-shell > .tr-side { grid-column: 1; grid-row: 1; }
+  .tr-shell > .tr-main { grid-column: 2; grid-row: 1; }
+  .tr-shell > .tr-preview { grid-column: 3; grid-row: 1; }
   .tr-preview .paper { max-width: none; }
 }
 @media (max-width: 1280px) {
@@ -807,6 +922,12 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
   .idea-list { grid-template-columns: minmax(0, 1fr); }
   .steps { gap: 18px; }
 }
+@media (max-width: 700px) {
+  /* one column, so a row of alignment chips never runs past the panel edge */
+  .tr-type-grid { grid-template-columns: minmax(0, 1fr); }
+  .tr-type-grid .pg-seg-row, .tr-blockpanel-grid .pg-seg-row { flex-wrap: wrap; }
+}
+
 @media (max-width: 600px) {
   .panel-switch-button { min-height: 34px; }
   .tool-tab { min-height: 50px; }
@@ -934,7 +1055,7 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
   .paper, .paper *, .tool-panel .pf-page, .tool-panel .pf-page * { visibility: visible !important; }
 
   /* Only the sheet matters: drop headers, toolbars, side panels and notices. */
-  .site-header, .intro, .how-section, .more-section, .site-footer, .tool-nav, .toast,
+  .site-header, .intro, .how-section, .more-section, .site-footer, .tool-nav, .page-strip, .toast,
   .panel-header, .panel-switch, .studio-heading, .preview-controls, .preview-footer, .preview-live-label,
   .editor-panel, .lab-shell, .cv-shell, .pf-side, .pf-controls, .pf-sliders, .tr-side, .tr-main,
   .tr-controls, .tr-extras, .tr-glossary, .tr-progress, .tr-list, .tr-preview-note, .lab-actions,
@@ -948,7 +1069,14 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
     background: none !important; box-shadow: none !important; max-height: none !important; min-height: 0 !important;
     overflow: visible !important; height: auto !important;
   }
-  .paper { position: static !important; inset: auto !important; width: min(100%, 210mm) !important; max-width: none !important; min-height: 0 !important; height: auto !important; margin: 0 auto !important; border: 0 !important; border-radius: 0 !important; box-shadow: none !important; overflow: visible !important; }
+  /* The margins are the printed page's own (@page, set from the strip), so the
+     sheet itself carries no padding — otherwise a page two would start at the
+     very top of the paper. The box gets the printable area, and the physical
+     size comes from @page. */
+  .paper { position: static !important; inset: auto !important; box-sizing: border-box !important; width: 100% !important; max-width: none !important; min-height: 0 !important; height: auto !important; margin: 0 !important; padding: 0 !important; border: 0 !important; border-radius: 0 !important; box-shadow: none !important; overflow: visible !important; print-color-adjust: var(--pg-color, exact); -webkit-print-color-adjust: var(--pg-color, exact); }
+  /* No sheet from another tab, and no off-screen export scaffolding. */
+  body[data-print-tool] .paper.pdf-export-page { display: none !important; }
+  html { font-size: calc(16px * var(--pg-scale, 1)); }
   .tool-panel .pf-page { width: min(100%, 297mm) !important; margin: 0 auto !important; border: 0 !important; box-shadow: none !important; break-after: page; }
   .document-content { break-inside: auto; }
   .document-content h1, .document-content h2, .document-content h3, .document-content blockquote, .document-content table, .document-content pre, .document-content img { break-inside: avoid; }

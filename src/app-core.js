@@ -174,19 +174,43 @@ function showToast(message, isError = false) {
   toastTimeout = window.setTimeout(() => toast.classList.remove('is-visible'), 3200);
 }
 
+/* The sheet belongs to the whole suite: page.js owns the paper size, the
+   margins and the print scale, and the studio's own controls are a second face
+   of the same store. Offline (no module support) the locals are the fallback. */
+const pageApi = () => window.folioPage;
+
+function paintPaperSize() {
+  const setup = pageApi()?.page();
+  if (setup) {
+    paper.dataset.pageSize = setup.sheet;
+    paper.dataset.orientation = setup.orientation;
+    return setup;
+  }
+  paper.dataset.pageSize = paperSelect.value;
+  paper.dataset.orientation = orientationSelect.value;
+  return null;
+}
+
 function updatePaperSettings() {
   paper.dataset.theme = themeSelect.value;
   paper.dataset.margin = marginSelect.value;
-  paper.dataset.orientation = orientationSelect.value;
-  const sizes = {
-    a4: 'A4',
-    letter: 'US Letter',
-    a5: 'A5',
-  };
-  const orientation = orientationSelect.value === 'landscape' ? 'Landscape' : 'Portrait';
-  paperStatus.textContent = `${sizes[paperSelect.value] ?? 'A4'} · ${orientation}`;
-  paper.setAttribute('aria-label', `${sizes[paperSelect.value] ?? 'A4'} ${orientation.toLowerCase()} document preview`);
+  const setup = paintPaperSize();
+  const label = pageApi()?.sheetMm(setup).label ?? { a4: 'A4', letter: 'US Letter', a5: 'A5' }[paperSelect.value] ?? 'A4';
+  const orientation = (setup?.orientation ?? orientationSelect.value) === 'landscape' ? 'Landscape' : 'Portrait';
+  paperStatus.textContent = `${label} · ${orientation}`;
+  paper.setAttribute('aria-label', `${label} ${orientation.toLowerCase()} document preview`);
 }
+
+/** Mirror a change made in the shared strip back onto the studio's controls. */
+function syncStudioControls(next) {
+  if (!next) return;
+  if (paperSelect.querySelector(`option[value="${next.sheet}"]`)) paperSelect.value = next.sheet;
+  orientationSelect.value = next.orientation;
+  if (next.preset !== 'custom' && marginSelect.querySelector(`option[value="${next.preset}"]`)) marginSelect.value = next.preset;
+  updatePaperSettings();
+}
+
+window.folioSyncStudio = syncStudioControls;
 
 function selectFile(file) {
   if (!file) return;
@@ -223,7 +247,7 @@ function getPdfPageWidthPixels() {
 }
 
 function createPdfDocument() {
-  const pageWidth = getPdfPageWidthPixels();
+  const pageWidth = pageApi()?.sheetPx() ?? getPdfPageWidthPixels();
   const root = document.createElement('div');
   root.className = 'pdf-export-root';
   root.setAttribute('aria-hidden', 'true');
@@ -241,12 +265,11 @@ function createPdfDocument() {
   exportPaper.style.overflow = 'visible';
   exportPaper.style.boxShadow = 'none';
 
-  const paddingByMargin = {
-    comfortable: '58px 64px 70px',
-    compact: '42px 48px 54px',
-    wide: '72px 78px 82px',
-  };
-  exportPaper.style.padding = paddingByMargin[marginSelect.value] ?? paddingByMargin.comfortable;
+  exportPaper.style.padding = pageApi()?.marginCss(undefined, 0, 'px')
+    ?? '58px 64px 70px';
+  const setup = pageApi()?.page();
+  if (setup) exportPaper.dataset.pageSize = setup.sheet;
+  exportPaper.dataset.margin = marginSelect.value;
 
   const content = exportPaper.querySelector('.document-content');
   content?.removeAttribute('id');
@@ -377,6 +400,12 @@ input.addEventListener('scroll', () => { lineNumbers.scrollTop = input.scrollTop
 exportButton.addEventListener('click', downloadPdf);
 [themeSelect, paperSelect, marginSelect, orientationSelect].forEach((control) => {
   control.addEventListener('change', () => {
+    const api = pageApi();
+    if (api) {
+      if (control === paperSelect) api.setPage({ sheet: paperSelect.value });
+      else if (control === orientationSelect) api.setPage({ orientation: orientationSelect.value });
+      else if (control === marginSelect) api.setPage({ preset: marginSelect.value });
+    }
     updatePaperSettings();
     scheduleSave();
   });
@@ -464,7 +493,7 @@ const savedWorkspace = readSavedWorkspace();
 if (savedWorkspace) {
   const supportedThemes = ['editorial', 'modern', 'warm'];
   const supportedPapers = ['a4', 'letter', 'a5'];
-  const supportedMargins = ['comfortable', 'compact', 'wide'];
+  const supportedMargins = ['comfortable', 'compact', 'wide', 'book', 'none'];
   themeSelect.value = supportedThemes.includes(savedWorkspace.theme) ? savedWorkspace.theme : 'editorial';
   paperSelect.value = supportedPapers.includes(savedWorkspace.paper) ? savedWorkspace.paper : 'a4';
   marginSelect.value = supportedMargins.includes(savedWorkspace.margin) ? savedWorkspace.margin : 'comfortable';
@@ -475,6 +504,24 @@ if (savedWorkspace) {
   setEditorValue(sampleMarkdown, currentFileName);
   setSaveStatus('Auto-save ready', 'saved');
 }
+/* The shared strip can change the sheet from any tab, so follow it — and seed
+   it once from an older saved workspace so nobody's settings move under them. */
+const pageApiAtBoot = window.folioPage;
+if (pageApiAtBoot) {
+  if (savedWorkspace && !window.localStorage.getItem('folio:page:v1')) {
+    const supportedSheets = ['a4', 'letter', 'a5'];
+    pageApiAtBoot.setPage({
+      sheet: supportedSheets.includes(savedWorkspace.paper) ? savedWorkspace.paper : 'a4',
+      orientation: savedWorkspace.orientation === 'landscape' ? 'landscape' : 'portrait',
+      preset: ['comfortable', 'compact', 'wide', 'book', 'none'].includes(savedWorkspace.margin) ? savedWorkspace.margin : 'comfortable',
+    });
+  }
+  pageApiAtBoot.onPage(syncStudioControls);
+  syncStudioControls(pageApiAtBoot.page());
+}
+
+document.querySelector('#printButton')?.addEventListener('click', () => pageApi()?.printSheet());
+
 updatePaperSettings();
 
 };

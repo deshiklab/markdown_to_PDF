@@ -2,6 +2,7 @@
    cover, plates, captions, colophon. Nothing leaves the browser except the
    images you add, and even those stay in memory. */
 import { bytes, debounce, el, escapeHtml, q, qa, readImage, rasterize, store, toast, pickFiles, hasFiles } from '../lib.js';
+import { printButton, setPage } from '../page.js';
 import { PAGE_SIZES, exportHtmlAsPdf, pagePixelSize } from '../render.js';
 
 const LAYOUTS = [
@@ -100,6 +101,7 @@ function layout() {
         <div><h3 id="pf-main-title">Your book, live</h3><p><span class="live-dot"></span> Exactly the pages you will download</p></div>
       </div>
       <div class="panel-header-actions">
+        ${printButton()}
         <span class="lab-count" id="pfPages">0 pages</span>
         <button class="button button-export" type="button" id="pfExport">${downloadIcon}<span>Download PDF</span></button>
       </div>
@@ -146,7 +148,7 @@ function layout() {
       <button class="button button-text" type="button" id="pfCoverClear" hidden>Remove</button>
     </div>
 
-    <div class="pf-stage" id="pfStage"></div>
+    <div class="pf-stage" id="pfStage" data-print-root></div>
     <div class="preview-footer"><span><svg viewBox="0 0 18 18" aria-hidden="true"><path d="M4.25 3.5h9.5v11h-9.5z"/><path d="M7 6.5h4m-4 2.5h4m-4 2.5h2.5"/></svg><span id="pfStatus">Nothing on the desk yet</span></span><span>Scroll the pages, then download</span></div>
   </section>
 </div>`;
@@ -180,7 +182,11 @@ function wire(root) {
   bind('pfLocation', 'location');
   bind('pfYear', 'year');
   bind('pfLayout', 'layout');
-  bind('pfSize', 'pageSize');
+  bind('pfSize', 'pageSize', undefined, () => {
+    // the book's paper is the strip's paper: one sheet, previewed and printed
+    const size = state.form.pageSize;
+    setPage({ sheet: size === 'a4l' ? 'a4' : size, orientation: size === 'a4l' ? 'landscape' : 'portrait' });
+  });
   bind('pfTone', 'tone');
   bind('pfRatio', 'ratio');
   bind('pfCover', 'cover');

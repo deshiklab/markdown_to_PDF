@@ -18,6 +18,7 @@ import {
   store,
   toast,
 } from '../lib.js';
+import { onPage, page, printButton } from '../page.js';
 
 const MODES = [
   { id: 'images', label: 'Photos → PDF', note: 'Build a clean PDF from images' },
@@ -34,7 +35,7 @@ const prefs = store('converter:v1', {
   mode: 'images',
   pageSize: 'a4',
   fit: 'contain',
-  margin: 'none',
+  margin: 'strip',
   quality: 86,
   autoOrientation: true,
   capSize: 2400,
@@ -83,10 +84,10 @@ function layout() {
       <span class="dropzone-button">Choose files</span>
     </div>
 
-    <div class="cv-stage" data-stage="images">
+    <div class="cv-stage" data-stage="images" data-print-root>
       <ul class="cv-grid" id="cvGrid" role="list"></ul>
     </div>
-    <div class="cv-stage" data-stage="pdf" hidden>
+    <div class="cv-stage" data-stage="pdf" data-print-root hidden>
       <ul class="cv-pdf-list" id="cvPdfList" role="list"></ul>
     </div>
   </section>
@@ -97,7 +98,7 @@ function layout() {
         <span class="panel-index panel-index-green">02</span>
         <div><h3 id="cv-main-title">Output</h3><p><span class="live-dot"></span> Tune, then download</p></div>
       </div>
-      <div class="panel-header-actions"><span class="lab-count" id="cvEstimate">—</span></div>
+      <div class="panel-header-actions">${printButton()}<span class="lab-count" id="cvEstimate">—</span></div>
     </div>
 
     <div class="lab-modes cv-modes" role="group" aria-label="Converter mode">
@@ -116,7 +117,7 @@ function layout() {
             <select class="text-input" id="cvFit"><option value="contain">Whole image</option><option value="cover">Fill the page</option><option value="page">Size the page to the image</option></select>
           </label>
           <label class="field"><span class="field-label">Margin</span>
-            <select class="text-input" id="cvMargin"><option value="none">None</option><option value="small">Small</option><option value="wide">Wide</option></select>
+            <select class="text-input" id="cvMargin"><option value="strip">From the page strip</option><option value="none">None</option><option value="small">Small (8mm)</option><option value="wide">Wide (18mm)</option></select>
           </label>
           <div class="field"><span class="field-label-row"><span class="field-label">Quality</span><output class="range-readout" id="cvQualityOut">86%</output></span><input class="range-input" id="cvQuality" type="range" min="40" max="100" step="1" /></div>
         </div>
@@ -198,6 +199,13 @@ function wire(root) {
     node.addEventListener('change', handler);
   };
   bind('cvPageSize', 'pageSize', undefined, () => estimateImages(root));
+  onPage(() => {
+    // photo pages follow the strip while that option is chosen
+    if (state.form.margin === 'strip') {
+      const select = q('#cvMargin', root);
+      if (select) select.value = 'strip';
+    }
+  });
   bind('cvFit', 'fit', undefined, () => estimateImages(root));
   bind('cvMargin', 'margin', undefined, () => estimateImages(root));
   bind('cvQuality', 'quality', Number, () => {
@@ -615,7 +623,17 @@ async function imagesToPdf(root) {
     const doc = await PDFDocument.create();
     doc.setCreator('Folio · Converter');
     const [pageWidthMm, pageHeightMm] = PAGES[state.form.pageSize] ?? PAGES.a4;
-    const marginPt = (state.form.margin === 'wide' ? 18 : state.form.margin === 'small' ? 8 : 0) * MM;
+    /* "From the page strip" reads the shared setup; the named sizes stay for
+       anyone who wants a quick, even border around every photo. */
+    let margin = { top: 0, right: 0, bottom: 0, left: 0 };
+    if (state.form.margin === 'small') margin = { top: 8, right: 8, bottom: 8, left: 8 };
+    else if (state.form.margin === 'wide') margin = { top: 18, right: 18, bottom: 18, left: 18 };
+    else if (state.form.margin === 'strip') {
+      const setup = page();
+      margin = { top: setup.margins.top, right: setup.margins.right, bottom: setup.margins.bottom, left: setup.margins.left };
+    }
+    const marginX = (margin.left + margin.right) * MM;
+    const marginY = (margin.top + margin.bottom) * MM;
     let keepPng = 0;
     for (const image of state.images) {
       const element = await ensureDecoded(image);
@@ -632,10 +650,10 @@ async function imagesToPdf(root) {
       const swapped = Math.abs(image.rotation % 180) === 90;
       const ratio = (swapped ? embedded.height / embedded.width : embedded.width / embedded.height) || 1;
       const sizePage = state.form.fit === 'page';
-      const pageWidth = sizePage ? Math.max(72, (swapped ? embedded.height : embedded.width) + marginPt * 2) : pageWidthMm * MM;
-      const pageHeight = sizePage ? Math.max(72, (swapped ? embedded.width : embedded.height) + marginPt * 2) : pageHeightMm * MM;
+      const pageWidth = sizePage ? Math.max(72, (swapped ? embedded.height : embedded.width) + marginX) : pageWidthMm * MM;
+      const pageHeight = sizePage ? Math.max(72, (swapped ? embedded.width : embedded.height) + marginY) : pageHeightMm * MM;
       const page = doc.addPage([pageWidth, pageHeight]);
-      const available = { width: Math.max(24, pageWidth - marginPt * 2), height: Math.max(24, pageHeight - marginPt * 2) };
+      const available = { width: Math.max(24, pageWidth - marginX), height: Math.max(24, pageHeight - marginY) };
       let drawWidth = available.width;
       let drawHeight = drawWidth / ratio;
       const tooTall = drawHeight > available.height;
@@ -658,8 +676,8 @@ async function imagesToPdf(root) {
         // contain/page keep the whole frame; cover intentionally crops in the encoder
       }
       page.drawImage(embedded, {
-        x: (pageWidth - drawWidth) / 2,
-        y: (pageHeight - drawHeight) / 2,
+        x: margin.left * MM + Math.max(0, (available.width - drawWidth) / 2),
+        y: margin.bottom * MM + Math.max(0, (available.height - drawHeight) / 2),
         width: drawWidth,
         height: drawHeight,
       });

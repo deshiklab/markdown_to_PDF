@@ -3,7 +3,7 @@
    Requires two packages that are deliberately NOT project dependencies:
      npm i --no-save puppeteer-core @sparticuz/chromium
 */
-import { mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
@@ -62,6 +62,23 @@ export async function open({ width = 1440, height = 1000, freshDownloads = true 
   }
   const page = await browser.newPage();
   await page.setViewport({ width, height });
+  /* A real click still (so the hit test counts), but centred first: the tab bar
+     and the page strip are sticky, and Puppeteer's own scroll can leave a button
+     underneath them, where the click would land on the strip instead. */
+  const rawClick = page.click.bind(page);
+  page.click = async (selector, options) => {
+    await page.$eval(selector, (node) => {
+      node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+      const sticky = ['#toolNav', '#pageStrip']
+        .map((sel) => document.querySelector(sel))
+        .filter((el) => el && el.offsetParent !== null)
+        .reduce((bottom, el) => Math.max(bottom, el.getBoundingClientRect().bottom), 0);
+      const rect = node.getBoundingClientRect();
+      if (sticky && rect.top < sticky + 10) window.scrollBy({ top: rect.top - sticky - 60, behavior: 'instant' });
+    }).catch(() => {});
+    await sleep(90);
+    return rawClick(selector, options);
+  };
   const client = await page.createCDPSession();
   await client.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: DOWNLOADS, eventsEnabled: true });
   page.on('pageerror', (error) => flag(`pageerror: ${String(error.message).slice(0, 200)}`));
@@ -75,15 +92,26 @@ export async function open({ width = 1440, height = 1000, freshDownloads = true 
 }
 
 export const files = () => readdirSync(DOWNLOADS).filter((name) => !name.endsWith('.crdownload'));
-export const snapshot = () => new Set(files());
+/* A signature per file, not just the names: Chromium here overwrites a download
+   that reuses a name instead of adding " (1)", so a second export of the same
+   document would otherwise look like nothing happened. */
+export const snapshot = () => new Map(files().map((name) => {
+  try {
+    const info = statSync(join(DOWNLOADS, name));
+    return [name, `${info.size}:${info.mtimeMs}`];
+  } catch {
+    return [name, 'missing'];
+  }
+}));
 export const fixture = (name) => (isAbsolute(name) ? name : join(FIXTURES, name));
 
 export async function waitForDownload(before, { seconds = 40 } = {}) {
   const deadline = Date.now() + seconds * 1000;
   while (Date.now() < deadline) {
-    const fresh = files().filter((name) => !before.has(name));
-    if (fresh.length) {
-      await sleep(350);
+    const now = snapshot();
+    const fresh = [...now].find(([name, signature]) => before.get(name) !== signature);
+    if (fresh) {
+      await sleep(400);
       return fresh[0];
     }
     await sleep(200);

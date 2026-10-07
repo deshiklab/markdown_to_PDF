@@ -22,12 +22,17 @@ import {
   store,
   toast,
 } from '../lib.js';
+import { page, printButton } from '../page.js';
 
 const MODES = [
   { id: 'merge', label: 'Merge & order', note: 'One file from many' },
   { id: 'split', label: 'Split & extract', note: 'Pages out of one file' },
   { id: 'watermark', label: 'Watermark', note: 'Stamp text on pages' },
+  { id: 'margins', label: 'Frame & trim', note: 'Real page margins' },
 ];
+/* 72 pt to the inch: pdf-lib works in points, the controls in whatever the
+   reader thinks in. */
+const MM_PER_UNIT = { mm: 1, in: 25.4, pt: 25.4 / 72 };
 
 const POSITIONS = ['top-left', 'top-center', 'top-right', 'middle-left', 'centre', 'middle-right', 'bottom-left', 'bottom-center', 'bottom-right'];
 
@@ -47,6 +52,13 @@ const defaults = {
   watermarkAll: true,
   watermarkRange: '',
   mergeName: 'folio-merged',
+  marginSource: '',
+  marginAction: 'frame',
+  marginUnit: 'mm',
+  marginTop: 12,
+  marginRight: 12,
+  marginBottom: 12,
+  marginLeft: 12,
 };
 
 const prefs = store('pdf-lab:v1', defaults);
@@ -82,6 +94,32 @@ export function start(root) {
   q('#labMergeGo', root)?.addEventListener('click', () => exportMerge(root));
   q('#labSplitGo', root)?.addEventListener('click', () => exportSplit(root));
   q('#labWatermarkGo', root)?.addEventListener('click', () => exportWatermark(root));
+  q('#labMarginGo', root)?.addEventListener('click', () => exportMargins(root));
+  qa('#labMarginUnits [data-margin-unit]', root).forEach((node) => {
+    node.addEventListener('click', () => {
+      const from = MM_PER_UNIT[state.form.marginUnit] ?? 1;
+      const to = MM_PER_UNIT[node.dataset.marginUnit] ?? 1;
+      // convert what is on screen, so 0.5in does not silently become 0.5mm
+      for (const side of ['Top', 'Right', 'Bottom', 'Left']) {
+        const key = `margin${side}`;
+        state.form[key] = round3((Number(state.form[key]) || 0) * from / to);
+      }
+      state.form.marginUnit = node.dataset.marginUnit;
+      persist(root);
+      paintMarginForm(root);
+    });
+  });
+  q('#labMarginCopy', root)?.addEventListener('click', () => {
+    const setup = page();
+    const unit = MM_PER_UNIT[state.form.marginUnit] ?? 1;
+    state.form.marginTop = round3(setup.top / unit);
+    state.form.marginRight = round3(setup.right / unit);
+    state.form.marginBottom = round3(setup.bottom / unit);
+    state.form.marginLeft = round3(setup.left / unit);
+    persist(root);
+    paintMarginForm(root);
+    toast(`Copied ${setup.top} / ${setup.right} / ${setup.bottom} / ${setup.left} mm from the page strip.`);
+  });
 
   bindForm(root);
   render(root);
@@ -121,7 +159,7 @@ function layout() {
         <span class="panel-index panel-index-green">02</span>
         <div><h3 id="lab-main-title">Do the thing</h3><p><span class="live-dot"></span> Preview updates as you edit</p></div>
       </div>
-      <div class="panel-header-actions"><span class="lab-count" id="labPageCount">—</span></div>
+      <div class="panel-header-actions">${printButton()}<span class="lab-count" id="labPageCount">—</span></div>
     </div>
 
     <div class="lab-modes" role="group" aria-label="PDF Lab mode">
@@ -152,6 +190,33 @@ function layout() {
         </div>
         <p class="lab-hint" id="labSplitHint">Add a PDF to begin.</p>
         <div class="lab-actions"><span></span><button class="button button-export" type="button" id="labSplitGo">${downloadIcon}<span>Download split files</span></button></div>
+      </div>
+
+      <div class="lab-mode-panel" data-mode-panel="margins" hidden>
+        <p class="lab-help">Change the paper itself: grow every page by a margin, or trim one off. Text stays selectable — this moves the page box, it does not rasterise anything.</p>
+        <div class="lab-row">
+          <label class="field grow"><span class="field-label">Source file</span><select class="text-input" id="labMarginSource"></select></label>
+          <span class="field"><span class="field-label">Units</span>
+            <span class="pg-seg-row" id="labMarginUnits">
+              <button type="button" class="pg-seg" data-margin-unit="mm">mm</button>
+              <button type="button" class="pg-seg" data-margin-unit="in">in</button>
+              <button type="button" class="pg-seg" data-margin-unit="pt">pt</button>
+            </span>
+          </span>
+        </div>
+        <div class="lab-segmented" role="radiogroup" aria-label="Margin action">
+          <label class="segment"><input type="radio" name="marginAction" value="frame" /><span>Add a frame</span></label>
+          <label class="segment"><input type="radio" name="marginAction" value="trim" /><span>Trim the edges</span></label>
+        </div>
+        <div class="lab-row lab-row-margins">
+          <label class="field"><span class="field-label">Top</span><input class="text-input text-input-narrow" id="labMarginTop" type="number" min="0" step="any" /></label>
+          <label class="field"><span class="field-label">Right</span><input class="text-input text-input-narrow" id="labMarginRight" type="number" min="0" step="any" /></label>
+          <label class="field"><span class="field-label">Bottom</span><input class="text-input text-input-narrow" id="labMarginBottom" type="number" min="0" step="any" /></label>
+          <label class="field"><span class="field-label">Left</span><input class="text-input text-input-narrow" id="labMarginLeft" type="number" min="0" step="any" /></label>
+          <button class="button button-light" type="button" id="labMarginCopy">Copy the strip’s margins</button>
+        </div>
+        <p class="lab-hint" id="labMarginHint">Add a frame to give a scan a printable border, or trim to cut a fat binding edge off.</p>
+        <div class="lab-actions"><span></span><button class="button button-export" type="button" id="labMarginGo">${downloadIcon}<span>Download reframed PDF</span></button></div>
       </div>
 
       <div class="lab-mode-panel" data-mode-panel="watermark" hidden>
@@ -355,7 +420,7 @@ function paintFiles(root) {
           el('button', { type: 'button', class: 'button button-light lab-mini is-danger', dataset: { forget: source.id }, text: 'Remove' }),
         ]),
       ]),
-      el('ul', { class: 'lab-thumbs', role: 'list' }, source.pages.map((page) =>
+      el('ul', { class: 'lab-thumbs', 'data-print-root': '', role: 'list' }, source.pages.map((page) =>
         el('li', { class: `lab-thumb${page.thumb ? ' is-ready' : ''}` }, [
           page.thumb ? el('img', { src: page.thumb, alt: '', loading: 'lazy' }) : null,
           el('span', { class: 'lab-thumb-index', text: String(page.index + 1) }),
@@ -392,7 +457,7 @@ function paintSelects(root) {
   const options = state.sources.length
     ? state.sources.map((source) => `<option value="${source.id}">${escapeHtml(source.name)} · ${source.pageCount}p</option>`).join('')
     : '<option value="">Add a PDF first</option>';
-  for (const [id, key] of [['#labSplitSource', 'splitSource'], ['#labWatermarkSource', 'watermarkSource']]) {
+  for (const [id, key] of [['#labSplitSource', 'splitSource'], ['#labWatermarkSource', 'watermarkSource'], ['#labMarginSource', 'marginSource']]) {
     const select = q(id, root);
     if (!select) continue;
     const previous = select.value;
@@ -499,7 +564,8 @@ function paintCounts(root) {
 }
 
 function activeSource(root, key) {
-  const id = q(key === 'splitSource' ? '#labSplitSource' : '#labWatermarkSource', root)?.value;
+  const selector = { splitSource: '#labSplitSource', watermarkSource: '#labWatermarkSource', marginSource: '#labMarginSource' }[key] ?? '#labMergeList';
+  const id = q(selector, root)?.value;
   return state.sources.find((source) => source.id === id) ?? state.sources[0] ?? null;
 }
 
@@ -530,8 +596,92 @@ function paintSplitHint(root) {
   }
 }
 
+function paintMarginForm(root) {
+  const unit = state.form.marginUnit ?? 'mm';
+  qa('#labMarginUnits [data-margin-unit]', root).forEach((node) => {
+    const on = node.dataset.marginUnit === unit;
+    node.classList.toggle('is-on', on);
+    node.ariaPressed = String(on);
+  });
+  for (const side of ['Top', 'Right', 'Bottom', 'Left']) {
+    const node = q(`#labMargin${side}`, root);
+    const key = `margin${side}`;
+    if (node && document.activeElement !== node) node.value = String(round3(state.form[key]));
+  }
+  const source = activeSource(root, 'marginSource');
+  const hint = q('#labMarginHint', root);
+  const action = state.form.marginAction;
+  if (!hint) return;
+  if (!source) {
+    hint.textContent = 'Add a PDF to begin.';
+    return;
+  }
+  const unitLabel = MM_PER_UNIT[unit] === 1 ? 'mm' : unit;
+  const margins = [state.form.marginTop, state.form.marginRight, state.form.marginBottom, state.form.marginLeft].map((value) => round3(Number(value) || 0));
+  const nothing = margins.every((value) => value === 0);
+  const first = source.pages[0];
+  hint.textContent = nothing
+    ? 'Type a margin on any side — or copy the numbers from the page strip.'
+    : `${action === 'frame' ? 'Every page grows' : 'Every page is trimmed'} by ${margins[0]} / ${margins[1]} / ${margins[2]} / ${margins[3]} ${unitLabel} (top, right, bottom, left) across ${source.pageCount} ${source.pageCount === 1 ? 'page' : 'pages'}${first?.width ? ` · e.g. ${Math.round(first.width + (action === 'frame' ? (margins[1] + margins[3]) : -(margins[1] + margins[3])) * (25.4 / 72))} × ${Math.round(first.height + (action === 'frame' ? (margins[0] + margins[2]) : -(margins[0] + margins[2])) * (25.4 / 72))} pt` : ''}.`;
+}
+
+/** Points from whatever unit the panel is showing. */
+function marginPoints(root) {
+  const unit = MM_PER_UNIT[state.form.marginUnit] ?? 1;
+  const mm = [state.form.marginTop, state.form.marginRight, state.form.marginBottom, state.form.marginLeft]
+    .map((value) => Math.max(0, Number(value) || 0) * unit);
+  void root;
+  return { top: mm[0] * (72 / 25.4), right: mm[1] * (72 / 25.4), bottom: mm[2] * (72 / 25.4), left: mm[3] * (72 / 25.4) };
+}
+
+/**
+ * Frame & trim: the page box is what changes, so the text stays text.
+ *   frame — the box grows around the content and the content is nudged inside it
+ *   trim  — the box shrinks and the content is cropped where the reader sees it
+ * Margins are given the way the reader sees the page, so a /Rotate 90 sheet
+ * gets its margin on the edge that faces up on screen, and framing never leaves
+ * a page upside down.
+ */
+async function exportMargins(root) {
+  await withBusy(root, '#labMarginGo', 'Reframing…', async () => {
+    const source = activeSource(root, 'marginSource');
+    if (!source) throw new Error('Add a PDF first.');
+    const m = marginPoints(root);
+    const total = m.top + m.right + m.bottom + m.left;
+    const action = state.form.marginAction === 'trim' ? 'trim' : 'frame';
+    if (total <= 0) throw new Error('Give the page a margin first — all four sides are zero.');
+    const { PDFDocument, degrees } = await loadPdfLib();
+    const doc = await PDFDocument.load(source.buffer.slice(0), { ignoreEncryption: true, updateMetadata: false });
+    const report = [];
+    doc.getPages().forEach((pdfPage, index) => {
+      const media = pdfPage.getMediaBox();
+      const quarter = ((pdfPage.getRotation().angle % 360) + 360) % 360;
+      const swap = quarter === 90 || quarter === 270;
+      // the reader's margins, rotated into the page's own coordinate space
+      const sides = !swap
+        ? { left: m.left, right: m.right, top: m.top, bottom: m.bottom }
+        : quarter === 90
+          ? { left: m.top, right: m.bottom, top: m.right, bottom: m.left }
+          : { left: m.bottom, right: m.top, top: m.left, bottom: m.right };
+      const width = Math.max(24, media.width + (action === 'frame' ? sides.left + sides.right : -(sides.left + sides.right)));
+      const height = Math.max(24, media.height + (action === 'frame' ? sides.top + sides.bottom : -(sides.top + sides.bottom)));
+      pdfPage.setMediaBox(0, 0, width, height);
+      if (action === 'frame') pdfPage.translateContent(sides.left - media.x, sides.bottom - media.y);
+      if (index === 0) report.push(`${Math.round(media.width)}×${Math.round(media.height)} → ${Math.round(width)}×${Math.round(height)} pt`);
+      void degrees;
+    });
+    save(new Uint8Array(await doc.save({ useObjectStreams: true })), safeFileName(`${stripPdf(source.name)}-${action === 'frame' ? 'framed' : 'trimmed'}`, 'pdf'), source.pageCount);
+    toast(`${report[0] ?? ''} ${report[0] ? '· ' : ''}${action === 'frame' ? 'framed' : 'trimmed'} on ${source.pageCount} ${source.pageCount === 1 ? 'page' : 'pages'}.`);
+  });
+}
+
+function round3(value) {
+  return Math.round((Number(value) || 0) * 1000) / 1000;
+}
+
 function paintWatermarkHint(root) {
   const hint = q('#labWatermarkHint', root);
+  paintMarginForm(root);
   if (!hint) return;
   const source = activeSource(root, 'watermarkSource');
   if (!source) {
@@ -574,6 +724,7 @@ function bindForm(root) {
       save();
       if (key === 'splitStyle' || key.startsWith('split')) paintSplitHint(root);
       if (key.startsWith('watermark')) paintWatermarkHint(root);
+      if (key.startsWith('margin')) paintMarginForm(root);
     });
     node.addEventListener('change', () => {
       state.form[key] = cast(node.value);
@@ -589,6 +740,23 @@ function bindForm(root) {
   text('#labWatermarkOpacity', 'watermarkOpacity', Number);
   text('#labWatermarkAngle', 'watermarkAngle', Number);
   text('#labWatermarkColor', 'watermarkColor');
+  text('#labMarginTop', 'marginTop', Number);
+  text('#labMarginRight', 'marginRight', Number);
+  text('#labMarginBottom', 'marginBottom', Number);
+  text('#labMarginLeft', 'marginLeft', Number);
+  qa('[name="marginAction"]', root).forEach((node) => {
+    node.checked = node.value === state.form.marginAction;
+    node.addEventListener('change', () => {
+      state.form.marginAction = node.value;
+      persist(root);
+      paintMarginForm(root);
+    });
+  });
+  q('#labMarginSource', root)?.addEventListener('change', (event) => {
+    state.form.marginSource = event.target.value;
+    persist(root);
+    paintMarginForm(root);
+  });
   q('#labSplitSource', root)?.addEventListener('change', (event) => {
     state.form.splitSource = event.target.value;
     paintSplitHint(root);

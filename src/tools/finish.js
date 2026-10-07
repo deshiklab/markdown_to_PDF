@@ -20,6 +20,7 @@ import {
   store,
   toast,
 } from '../lib.js';
+import { printButton } from '../page.js';
 
 const MODES = [
   { id: 'meta', label: 'Document fields', note: 'Title, author, dates' },
@@ -110,7 +111,7 @@ function layout() {
     </div>
 
     <div id="fnCard" class="fn-card"></div>
-    <div class="fn-preview" id="fnPreview" hidden>
+    <div class="fn-preview" id="fnPreview" data-print-root hidden>
       <canvas id="fnCanvas" aria-label="Top of page one with the current edits drawn on"></canvas>
       <p class="fn-preview-note" id="fnPreviewNote">page 1 · live preview of this tab's edits</p>
     </div>
@@ -122,7 +123,7 @@ function layout() {
         <span class="panel-index panel-index-green">02</span>
         <div><h3 id="fn-main-title">Finish it</h3><p><span class="live-dot"></span> Nothing is uploaded — you download a new file</p></div>
       </div>
-      <div class="panel-header-actions"><span class="lab-count" id="fnStat">no file</span></div>
+      <div class="panel-header-actions">${printButton()}<span class="lab-count" id="fnStat">no file</span></div>
     </div>
 
     <div class="lab-modes" role="group" aria-label="Finish mode">
