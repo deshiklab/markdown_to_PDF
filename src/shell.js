@@ -91,6 +91,16 @@ function paintActive(id) {
   if (meta) meta.setAttribute('content', `Folio ${LABELS[id]} — free, private tools that run in your browser.`);
 }
 
+/** Switching tabs while scrolled deep into a long tool should not leave the
+   new tool out of view, so bring the tab strip back to the top edge. */
+function liftToTabs() {
+  const nav = q('.tool-nav');
+  if (!nav) return;
+  const top = nav.getBoundingClientRect().top;
+  if (top >= -4 && top <= window.innerHeight * 0.5) return;
+  window.scrollTo({ top: window.scrollY + top - 8, behavior: motionOk() ? 'smooth' : 'auto' });
+}
+
 function motionOk() {
   return !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
@@ -99,6 +109,7 @@ function activate(id, { focus = false } = {}) {
   const next = TOOL_IDS.includes(id) ? id : 'markdown';
   state.active = next;
   paintActive(next);
+  liftToTabs();
   if (focus) q(`#tab-${next}`)?.focus({ preventScroll: true });
   return next;
 }

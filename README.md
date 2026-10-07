@@ -64,7 +64,10 @@ The layout was audited in a real browser from `320px` to `1600px`:
 - Studio panels are side-by-side from `1120px` up, and switch to two full-height tabs (Editor / Preview) below `900px`.
 - Every tool uses auto-fit grids, so file lists, photo grids, watermarks and controls reflow at 1, 2, 3 and 4 columns without breakpoint soup.
 - Touch: `pointer: coarse` grows icon buttons to 34px, always shows hover-only actions, hides the file-type chip line, and pins the toast above the safe area.
-- `prefers-reduced-motion: reduce` and `forced-colors: active` are both handled; `@media print` still prints only the paper sheet.
+- `prefers-reduced-motion: reduce` and `forced-colors: active` are both handled.
+- The tab strip fades its edges only when it can actually scroll, and switching tabs while deep in a long tool brings the strip back into view instead of leaving you at the new tool's footer.
+- Micro copy is legible: every label under 10.5px was darkened to at least 4.5:1 against the paper (the design still reads quiet, it just no longer needs a magnifier).
+- `@media print` prints the sheet, not the app: toolbars, side panels and notices collapse, so Cmd-P from the studio or the Translate preview gives a clean page-one-at-the-top document, and the Portfolio book prints one page per sheet.
 
 ## More tools on the bench
 

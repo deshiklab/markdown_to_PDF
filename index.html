@@ -275,7 +275,7 @@
 
       const list = document.querySelector('#ideaList');
       if (list) {
-        list.innerHTML = IDEAS.map((idea) => `<li class="idea-card"><span class="idea-tag">${idea.tag}</span><h3>${idea.title}</h3><p>${idea.note}</p></li>`).join('');
+        list.innerHTML = IDEAS.map((idea) => `<li class="idea-card"><span class="idea-tag" data-tag="${idea.tag.toLowerCase()}">${idea.tag}</span><h3>${idea.title}</h3><p>${idea.note}</p></li>`).join('');
       }
 
       if (window.location.protocol === 'file:') {
