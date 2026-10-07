@@ -49,6 +49,12 @@ const exportButton = document.querySelector('#exportButton');
 const toast = document.querySelector('#toast');
 const paperStatus = document.querySelector('#paperStatus');
 
+
+function studioIsVisible() {
+  const panel = document.querySelector('#panel-markdown');
+  return !panel || !panel.hidden;
+}
+
 const workspaceStorageKey = 'folio:workspace:v1';
 let currentFileName = 'morning-notes.md';
 let toastTimeout;
@@ -157,6 +163,10 @@ function setEditorValue(value, name = currentFileName) {
 }
 
 function showToast(message, isError = false) {
+  if (window.folioToast) {
+    window.folioToast(message, isError);
+    return;
+  }
   window.clearTimeout(toastTimeout);
   toast.textContent = message;
   toast.classList.toggle('is-error', isError);
@@ -408,25 +418,25 @@ function hasDraggedFiles(event) {
 }
 
 document.addEventListener('dragenter', (event) => {
-  if (!hasDraggedFiles(event)) return;
+  if (!hasDraggedFiles(event) || !studioIsVisible()) return;
   event.preventDefault();
   dragDepth += 1;
   editorPanel.classList.add('is-dragging');
 });
 document.addEventListener('dragover', (event) => {
-  if (!hasDraggedFiles(event)) return;
+  if (!hasDraggedFiles(event) || !studioIsVisible()) return;
   event.preventDefault();
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
 });
 document.addEventListener('dragleave', (event) => {
-  if (!hasDraggedFiles(event)) return;
+  if (!hasDraggedFiles(event) || !studioIsVisible()) return;
   dragDepth = Math.max(0, dragDepth - 1);
   const nextTarget = event.relatedTarget;
   const remainsInEditor = nextTarget instanceof Node && dropTarget.contains(nextTarget);
   if (dragDepth === 0 && !remainsInEditor) editorPanel.classList.remove('is-dragging');
 });
 document.addEventListener('drop', (event) => {
-  if (!hasDraggedFiles(event)) return;
+  if (!hasDraggedFiles(event) || !studioIsVisible()) return;
   event.preventDefault();
   dragDepth = 0;
   editorPanel.classList.remove('is-dragging');
@@ -435,6 +445,7 @@ document.addEventListener('drop', (event) => {
 
 window.addEventListener('keydown', (event) => {
   const modifier = event.metaKey || event.ctrlKey;
+  if (!studioIsVisible()) return;
   if (modifier && event.key.toLowerCase() === 'o') {
     event.preventDefault();
     fileInput.click();
