@@ -1,4 +1,5 @@
 /* Folio QA driver.
+     node qa/drive.mjs tabs      — every way back into the studio, panel by panel
      node qa/drive.mjs frame     — the shared page setup: strip, previews, @page, page boxes
      node qa/drive.mjs trfmt     — Translate: extraction, page-faithful export, re-typeset
      node qa/drive.mjs sign      — the Sign tab, end to end, with PDF checks
@@ -342,7 +343,17 @@ async function sign() {
     const clean = await bandsOf(fixture('rot90.pdf'));
     const ink = await bandsOf(`${DOWNLOADS}/${rotSigned}`, { shot: 'rotated-page1' });
     if (clean && ink) {
-      const diff = ink.bands.map((value, index) => value - clean.bands[index]);
+      let diff = ink.bands.map((value, index) => value - clean.bands[index]);
+      if (diff[0] + diff[1] < 60 || diff[6] + diff[7] < 120) {
+        /* One more read of the same bytes. A bare end is either a mark the app
+           really dropped or the rasteriser handing back a page it had not
+           finished decoding, and re-rendering the file settles which without
+           touching the PDF — this assertion used to fail once a run here while
+           `node qa/drive.mjs sign` on its own was green three times. */
+        say('rotated bands', 'an end came back bare — re-reading the rendered page');
+        const again = await bandsOf(`${DOWNLOADS}/${rotSigned}`, { shot: 'rotated-page1-retry' });
+        if (again) diff = again.bands.map((value, index) => value - clean.bands[index]);
+      }
       say('rotated bands added', diff.join(' '));
       if (writeFileSync && ink.png) writeFileSync(`${SHOTS}/rotated-page1.png`, Buffer.from(ink.png, 'base64'));
       // A went bottom-right, B went top-left, so both ends of the page must gain ink and the middle must not
@@ -1196,7 +1207,86 @@ async function touch() {
   if (!name) flag('no signed file was produced on a phone-sized viewport');
 }
 
+/* ------------------------------------------------------- switching tabs ---- */
+/* The studio has no lazy loader of its own — app-core wires it up out of the
+   markup already in index.html — so asking the shell to mount it must do
+   nothing at all. It used to paint "this tool runs through the dev server"
+   over the panel instead, which deleted the editor along with anything typed
+   into it, and only a reload brought the draft back. Every way back into the
+   studio is walked here: clicking the tab, the arrow keys on the tablist, and
+   the "How it works" link in the header. */
+async function tabs() {
+  await page.setViewport({ width: 1440, height: 1000 });
+  const noise = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error' || message.type() === 'warning') noise.push(message.text().slice(0, 90));
+  });
+
+  await goto(page, '#/markdown', 2200);
+  await type(page, '#markdownInput', '# Keeping the draft\n\nSwitch tabs and come back.\n\n- one\n- two\n');
+  await sleep(900);
+
+  const studio = () => page.evaluate(() => {
+    const panel = document.querySelector('#panel-markdown');
+    const editor = panel.querySelector('#markdownInput');
+    return {
+      notice: panel.querySelector('.tool-notice')?.textContent.trim().slice(0, 42) ?? null,
+      editor: !!editor,
+      value: editor ? editor.value.slice(0, 20) : null,
+      preview: panel.querySelectorAll('#previewContent > *').length,
+    };
+  });
+
+  const kept = await studio();
+  if (!kept.editor || kept.notice) flag(`the studio was not usable to begin with: ${JSON.stringify(kept)}`);
+  say('studio before switching', kept.editor && !kept.notice ? `typing · ${kept.preview} rendered blocks` : 'BROKEN');
+  if (!kept.preview) flag('the studio preview is empty before anything was switched');
+
+  for (const id of ['pdf-lab', 'translate', 'convert', 'portfolio', 'finish', 'sign']) {
+    await page.click(`#tab-${id}`);
+    await sleep(1500);
+    const mounted = await page.evaluate((tool) => {
+      const panel = document.querySelector(`#panel-${tool}`);
+      return { nodes: panel.querySelectorAll('*').length, notice: panel.querySelector('.tool-notice')?.textContent.slice(0, 40) ?? null };
+    }, id);
+    if (mounted.notice) flag(`${id} answers a tab click with “${mounted.notice.trim()}” instead of its tool`);
+    else if (mounted.nodes < 20) flag(`${id} looks empty after a tab click: ${mounted.nodes} nodes`);
+    await page.click('#tab-markdown');
+    await sleep(700);
+    const back = await studio();
+    if (back.notice) flag(`studio lost after ${id}: notice “${back.notice}”`);
+    else if (!back.editor) flag(`the editor is gone after ${id} — a tab click deleted the studio`);
+    else if (back.value !== kept.value) flag(`the draft changed after ${id}: ${JSON.stringify(back.value)} ≠ ${JSON.stringify(kept.value)}`);
+    else if (!back.preview) flag(`the preview is blank after ${id}`);
+    else say(`back from ${id}`, `${back.preview} rendered blocks · draft kept`);
+  }
+
+  /* keyboard: a full lap of the tablist arrives at the studio the same way */
+  await page.focus('#tab-sign');
+  for (let i = 0; i < 6; i += 1) {
+    await page.keyboard.press('ArrowRight');
+    await sleep(320);
+  }
+  await sleep(500);
+  let after = await studio();
+  if (after.notice) flag(`studio lost by the arrow keys: “${after.notice}”`);
+  else say('arrow-key lap', `studio intact · ${after.preview} rendered blocks`);
+
+  /* the header link on another tab switches to the studio to scroll there */
+  await goto(page, '#/finish', 1800);
+  await page.click('a.header-link[href="#how-it-works"]');
+  await sleep(1000);
+  after = await studio();
+  if (after.notice) flag(`studio lost by the “How it works” jump: “${after.notice}”`);
+  else say('header jump', `studio intact · ${after.preview} rendered blocks`);
+
+  const loud = noise.filter((line) => /nothing to mount|could not load|Folio could not start/.test(line));
+  say('console', loud.length ? loud.join(' | ') : 'no mount warnings');
+  if (loud.length) flag('the shell warned about a tab it could not mount');
+}
+
 const isolated = {
+  tabs: () => session(tabs),
   frame: () => session(frame),
   trfmt: () => session(trfmt),
   pad: () => session(pad),
@@ -1206,6 +1296,7 @@ const isolated = {
   regress: () => session(regress),
   audit: () => session(audit),
   all: async () => {
+    await session(tabs);
     await session(frame);
     await session(trfmt);
     await session(pad);

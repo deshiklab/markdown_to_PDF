@@ -152,13 +152,14 @@ async function mountTool(id, loaders) {
   if (state.mounted.has(id)) return true;
   const loader = loaders?.[id];
   if (!loader) {
-    panel.innerHTML = '';
-    panel.append(
-      el('div', { class: 'tool-notice' }, [
-        el('strong', { text: 'This tool runs through the dev server.' }),
-        el('p', { html: 'Opening <code>index.html</code> straight from disk keeps only the Markdown studio. Run <code>npm run dev</code> and open <code>http://localhost:5173/</code> for the full suite.' }),
-      ]),
-    );
+    /* No loader means one of two things: the tab is the Markdown studio, which
+       app-core wires up from the markup already in index.html, or the tab was
+       added to TOOL_IDS and forgotten in main.js. Neither is a reason to
+       delete what is on screen — this branch used to write "this tool runs
+       through the dev server" over the studio, and the document typed into it
+       went with it. The panel is left exactly as it is, and a tab nobody
+       registered is named in the console where the mistake actually is. */
+    if (id !== 'markdown') console.warn(`Folio: nothing to mount for the "${id}" tab.`);
     return false;
   }
   if (!state.loading.has(id)) {

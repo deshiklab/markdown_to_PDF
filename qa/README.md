@@ -11,7 +11,7 @@ synthetic — the harness never touches your documents.
 npm run dev -- --host 0.0.0.0 --port 5173   # in one terminal
 npm i --no-save puppeteer-core @sparticuz/chromium   # deliberately not a project dependency
 npm run qa:fixtures
-npm run qa -- trfmt         # or: frame, pad, sign, touch, finish, regress, audit, all
+npm run qa -- trfmt         # or: tabs, frame, pad, sign, touch, finish, regress, audit, all
 ```
 
 `npm run qa -- all` runs everything and exits non-zero if anything is wrong. The
@@ -33,6 +33,7 @@ The harness picks up `/tmp/al2023/lib` (or `qa/.chromium-lib`) automatically.
 
 | Step | What it proves |
 | --- | --- |
+| `tabs` | Every way back into the Markdown studio after visiting another tab — the tab click, a full arrow-key lap of the tablist, the “How it works” jump in the header — leaves the editor, the typed draft and the rendered blocks alone. The studio has no lazy loader of its own, and asking for one used to write an offline-mode notice straight over the panel, deleting the document; the step also fails if any tab answers a click with that notice, an error panel, or fewer than 20 nodes, or if the shell logs “nothing to mount” |
 | `frame` | The shared page setup, end to end: paper + preset + a per-side edit + a unit switch in the strip reach the studio's sheet (padding in px, gutter included), carry to another tab, and size the Translate preview to a real A5 at 96 dpi; the Print button calls `window.print` once with `data-print-tool` set and an `@page` rule carrying the sheet *and* its margins; `page.pdf()` comes back at 420×595 pt with the first line of text 75 pt down on page one **and on page two** (padding would have lost it); PDF Lab's Frame & trim grows 595×842 to 652×870 pt with the text still selectable, and trims it to 425×672; the Converter's "from the page strip" insets the photo by 52.9 pt where "none" leaves it at 0 |
 | `trfmt` | Translate's two promises. Extraction finds 15 blocks in the 3-page fixture and offers one row per block; the page-faithful export is a copy of the original with white fills over the source lines, the Latin translation in the text layer (found at x 56, the source line's own left edge, at 16.9 pt because the longer text had to shrink) and the Bengali drawn as one image; *keep the original* doubles the pages and leaves the source text intact; re-typeset honours the typeface, size, first-line indent and hierarchy and applies a per-block override (a quote, 15 pt, right-aligned); the re-typeset PDF is the A4 sheet the strip asked for; Print fires once from this tab |
 | `pad` | The pad's geometry at nine widths: the canvas bitmap matches the CSS box inside its 1 px frame, a stroke lands where the pointer went, and a panel that re-measures itself (a rotate, an on-screen keyboard, a breakpoint) neither drops the ink nor slides it — coordinates are stored as fractions, so the saved mark matches what was drawn |
