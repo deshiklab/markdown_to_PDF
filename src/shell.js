@@ -9,7 +9,7 @@
 // Markdown → PDF editor independent of PDF Lab, Sign, etc. so a bug in
 // one tab can't take the others down.
 
-import { h, $, on } from './lib.js';
+import { h, $, $$, on } from './lib.js';
 
 const TAB_STRIP_ID = 'toolNavScroll';
 const STRIP_FADE_LEFT = 'toolNavFadeLeft';
