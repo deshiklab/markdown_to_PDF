@@ -421,6 +421,12 @@ kbd { display: inline-grid; place-items: center; min-width: 19px; height: 19px; 
 }
 
 /* ---------------------------------------------------------------------------
+   Markdown tab — wraps the workbench so it sits inside the panel.
+   --------------------------------------------------------------------------- */
+
+.tool-markdown { padding: 22px 22px 26px; display: flex; flex-direction: column; gap: 14px; }
+
+/* ---------------------------------------------------------------------------
    Converter tab — sub-tab strip, settings card, file list, drop zone.
    --------------------------------------------------------------------------- */
 
