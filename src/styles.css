@@ -410,3 +410,71 @@ kbd { display: inline-grid; place-items: center; min-width: 19px; height: 19px; 
   .tool-nav-card, .tool-panel, .tool-placeholder-inner { border-color: CanvasText; }
   .tool-nav-card.is-active { outline: 2px solid Highlight; }
 }
+
+/* ---------------------------------------------------------------------------
+   Converter tab — sub-tab strip, settings card, file list, drop zone.
+   --------------------------------------------------------------------------- */
+
+.tool-converter { padding: 22px 22px 26px; }
+.converter-subtabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; padding: 0 2px 10px; border-bottom: 1px solid #ececdf; }
+.converter-subtab { display: flex; flex-direction: column; gap: 2px; min-width: 156px; flex: 0 1 auto; padding: 8px 12px; border: 1px solid transparent; border-radius: 9px; color: #6b776e; background: transparent; cursor: pointer; text-align: left; transition: background .15s, color .15s, border-color .15s; }
+.converter-subtab:hover { color: #3f6b4f; background: #f1f5ed; }
+.converter-subtab.is-active { color: #2c4a3b; border-color: #c8d8b9; background: #f3f7ec; }
+.converter-subtab-title { font-size: 11px; font-weight: 700; }
+.converter-subtab-sub { color: #8b9185; font-size: 9px; line-height: 1.35; }
+
+.converter-stage { display: block; }
+.converter-sub { display: flex; flex-direction: column; gap: 16px; }
+.converter-sub-head h3 { margin: 0 0 4px; color: #2c4a3b; font-size: 15px; letter-spacing: -.2px; }
+.converter-sub-head p { margin: 0; color: #7c857c; font-size: 11px; line-height: 1.55; max-width: 560px; }
+.converter-sub-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 16px; align-items: start; }
+.converter-settings { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid #e8e8e1; border-radius: 11px; background: #fafbf6; }
+.converter-row { display: grid; grid-template-columns: 110px minmax(0, 1fr); align-items: center; gap: 10px; padding: 6px 0; }
+.converter-row-label { color: #707870; font-size: 10px; font-weight: 600; letter-spacing: .3px; }
+.converter-row-control { position: relative; display: flex; align-items: center; gap: 6px; }
+.converter-row-control select, .converter-row-control input[type="text"] { width: 100%; padding: 5px 8px; border: 1px solid #e0e2d8; border-radius: 6px; color: #48544c; background: #fff; font-size: 10px; font-weight: 600; outline: none; }
+.converter-row-control select { padding-right: 22px; appearance: none; }
+.converter-row-control select:focus, .converter-row-control input[type="text"]:focus { border-color: #8fb087; box-shadow: 0 0 0 3px rgba(143, 176, 135, .15); }
+.converter-row-control svg { position: absolute; right: 8px; width: 10px; height: 10px; fill: none; stroke: #929a91; stroke-width: 1.4; pointer-events: none; }
+.converter-row-range { gap: 8px; }
+.converter-row-range input[type="range"] { flex: 1; -webkit-appearance: none; height: 4px; background: #dde3d4; border-radius: 999px; outline: none; }
+.converter-row-range input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #4e7559; border: 2px solid #fff; box-shadow: 0 1px 2px rgba(0,0,0,.12); cursor: pointer; }
+.converter-row-range input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #4e7559; border: 2px solid #fff; cursor: pointer; }
+.converter-row-value { color: #48544c; font-family: var(--mono); font-size: 10px; min-width: 44px; text-align: right; }
+.converter-row-hint { color: #95998f; font-size: 9px; }
+.toggle-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; color: #48544c; font-size: 10px; cursor: pointer; }
+.toggle-row input { accent-color: #4e7559; }
+.toggle-row span { line-height: 1.4; }
+
+.converter-files { display: flex; flex-direction: column; gap: 10px; }
+.converter-drop { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 18px 14px; border: 1.5px dashed #cfd9cb; border-radius: 11px; color: #657265; background: #fafcf6; text-align: center; transition: background .15s, border-color .15s, color .15s; }
+.converter-drop.is-drag { border-color: #4e7559; color: #2c4a3b; background: #ecf3e6; }
+.converter-drop svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.converter-drop strong { font-size: 12px; }
+.converter-drop span { font-size: 10px; }
+.converter-drop .button { margin-top: 6px; }
+
+.converter-file-list { display: flex; flex-direction: column; gap: 6px; max-height: 280px; overflow: auto; padding-right: 4px; }
+.converter-file-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid #e8e8e1; border-radius: 8px; background: #fff; }
+.converter-file-name { overflow: hidden; color: #48544c; font-family: var(--mono); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.converter-file-size { color: #95998f; font-size: 9px; }
+.converter-file-remove { display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 6px; color: #b3625b; background: transparent; cursor: pointer; font-size: 14px; line-height: 1; }
+.converter-file-remove:hover { background: #fbeae6; }
+
+.converter-sub-foot { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid #e8e8e1; border-radius: 10px; background: #fff; }
+.converter-sub-status { color: #7c857c; font-size: 10px; line-height: 1.5; }
+.converter-sub-foot .button-export { min-width: 150px; }
+
+@media (max-width: 900px) {
+  .converter-sub-body { grid-template-columns: minmax(0, 1fr); }
+  .converter-subtab { min-width: 0; flex: 1 1 calc(50% - 4px); }
+  .converter-row { grid-template-columns: 90px minmax(0, 1fr); }
+}
+@media (max-width: 600px) {
+  .tool-converter { padding: 16px 14px 18px; }
+  .converter-subtab { flex: 1 1 100%; }
+  .converter-sub-foot { flex-direction: column; align-items: stretch; gap: 10px; }
+  .converter-sub-foot .button-export { width: 100%; }
+  .converter-row { grid-template-columns: 1fr; gap: 4px; }
+  .converter-row-label { font-size: 9px; }
+}
