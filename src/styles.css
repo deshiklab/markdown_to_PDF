@@ -1124,6 +1124,7 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
   .tool-panel .pf-page { width: min(100%, 297mm) !important; margin: 0 auto !important; border: 0 !important; box-shadow: none !important; break-after: page; }
   .document-content { break-inside: auto; }
   .document-content h1, .document-content h2, .document-content h3, .document-content blockquote, .document-content table, .document-content pre, .document-content img { break-inside: avoid; }
+}
 
 /* ---------------------------------------------------------------- forms ---- */
 /* The Forms tab re-uses the Finish tab's shell (`fn-shell`, `fn-side`,
