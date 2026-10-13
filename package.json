@@ -19,7 +19,8 @@
     "html2pdf.js": "^0.14.0",
     "marked": "^18.1.0",
     "pdf-lib": "^1.17.1",
-    "pdfjs-dist": "^4.10.38"
+    "pdfjs-dist": "^4.10.38",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "vite": "^8.3.3"

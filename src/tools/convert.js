@@ -11,6 +11,7 @@ import {
   loadPdfLib,
   pdfjsAssetOptions,
   makeZip,
+  parsePageRanges,
   pickFiles,
   q,
   qa,
@@ -24,6 +25,7 @@ const MODES = [
   { id: 'images', label: 'Photos → PDF', note: 'Build a clean PDF from images' },
   { id: 'text', label: 'PDF → text', note: '.txt, .md, .html, .doc' },
   { id: 'images-out', label: 'PDF → images', note: 'Every page as PNG or JPEG' },
+  { id: 'ocr', label: 'OCR scans', note: 'Make a photo-PDF searchable' },
   { id: 'shrink', label: 'Shrink images', note: 'Resize + recompress' },
 ];
 
@@ -46,6 +48,10 @@ const prefs = store('converter:v1', {
   shrinkMax: 2000,
   shrinkQuality: 80,
   shrinkFormat: 'jpeg',
+  ocrLang: 'eng',
+  ocrPages: 'all',
+  ocrDpi: '300',
+  ocrOutput: 'searchable',
 });
 
 const state = {
@@ -53,6 +59,9 @@ const state = {
   images: [],
   pdfs: [],
   busy: false,
+  // OCR: the tesseract worker is loaded lazily and reused across runs
+  ocrWorker: null,
+  ocrWorkerLang: null,
 };
 
 export function start(root) {
@@ -170,6 +179,59 @@ function layout() {
         <ul class="cv-shrink-list" id="cvShrinkList" role="list"></ul>
         <div class="lab-actions"><span></span><button class="button button-export" type="button" id="cvShrinkGo">${downloadIcon}<span>Download shrunk images</span></button></div>
       </div>
+
+      <div class="cv-panel" data-cv-panel="ocr" hidden>
+        <p class="lab-help">Open a scanned PDF. We render each page, run Tesseract.js on the image, and either add the recognized text as a hidden layer (the file stays an image, but reader search finds words) or write the text out on its own.</p>
+        <div class="lab-row">
+          <label class="field"><span class="field-label">Language</span>
+            <select class="text-input" id="cvOcrLang">
+              <option value="eng">English</option>
+              <option value="spa">Spanish</option>
+              <option value="fra">French</option>
+              <option value="deu">German</option>
+              <option value="por">Portuguese</option>
+              <option value="ita">Italian</option>
+              <option value="nld">Dutch</option>
+              <option value="rus">Russian</option>
+              <option value="ukr">Ukrainian</option>
+              <option value="ara">Arabic</option>
+              <option value="hin">Hindi</option>
+              <option value="ben">Bengali</option>
+              <option value="chi_sim">Chinese (simplified)</option>
+              <option value="chi_tra">Chinese (traditional)</option>
+              <option value="jpn">Japanese</option>
+              <option value="kor">Korean</option>
+              <option value="tha">Thai</option>
+              <option value="vie">Vietnamese</option>
+            </select>
+          </label>
+          <label class="field"><span class="field-label">Pages</span><input class="text-input" id="cvOcrPages" type="text" placeholder="all, or 1-3, 5" value="all" /></label>
+          <label class="field"><span class="field-label">DPI</span>
+            <select class="text-input" id="cvOcrDpi">
+              <option value="200">200 (fast)</option>
+              <option value="300" selected>300 (default)</option>
+              <option value="400">400 (careful)</option>
+            </select>
+          </label>
+        </div>
+        <div class="lab-row">
+          <label class="field"><span class="field-label">Output</span>
+            <div class="lab-pos-row" role="radiogroup" aria-label="Output">
+              <button type="button" class="lab-pos is-on" data-cv-ocr-out="searchable" aria-pressed="true"><span>Searchable PDF</span></button>
+              <button type="button" class="lab-pos" data-cv-ocr-out="text" aria-pressed="false"><span>Plain text</span></button>
+            </div>
+          </label>
+        </div>
+        <div class="cv-ocr-progress" id="cvOcrProgress" hidden>
+          <div class="cv-ocr-bar"><div class="cv-ocr-bar-fill" id="cvOcrBarFill"></div></div>
+          <p class="cv-ocr-status" id="cvOcrStatus">Loading language model…</p>
+        </div>
+        <p class="lab-hint" id="cvOcrHint">Add a scanned PDF to begin. The first run downloads the language model (~10&nbsp;MB) from Tesseract's CDN.</p>
+        <div class="lab-actions">
+          <span></span>
+          <button class="button button-export" type="button" id="cvOcrGo">${downloadIcon}<span>Run OCR</span></button>
+        </div>
+      </div>
     </div>
   </section>
 </div>`;
@@ -224,6 +286,15 @@ function wire(root) {
   bind('cvShrinkQuality', 'shrinkQuality', Number, () => {
     q('#cvShrinkQ2Out', root).textContent = `${state.form.shrinkQuality}%`;
   });
+  bind('cvOcrLang', 'ocrLang');
+  bind('cvOcrDpi', 'ocrDpi', Number);
+  bind('cvOcrPages', 'ocrPages');
+  // OCR output toggle — match the persisted value
+  qa('[data-cv-ocr-out]', root).forEach((n) => {
+    const on = n.dataset.cvOcrOut === (state.form.ocrOutput || 'searchable');
+    n.classList.toggle('is-on', on);
+    n.setAttribute('aria-pressed', String(on));
+  });
 
   const drop = q('#cvDrop', root);
   const open = () => pickFiles({ accept: acceptFor(state.form.mode), multiple: true }).then((files) => handleFiles(files, root));
@@ -270,6 +341,22 @@ function wire(root) {
   });
   q('#cvImagesOutGo', root)?.addEventListener('click', () => pagesToImages(root));
   q('#cvShrinkGo', root)?.addEventListener('click', () => shrinkImages(root));
+  // OCR
+  q('#cvOcrLang', root)?.addEventListener('change', (e) => { state.form.ocrLang = e.target.value; save(); });
+  q('#cvOcrPages', root)?.addEventListener('input', (e) => { state.form.ocrPages = e.target.value; save(); });
+  q('#cvOcrDpi', root)?.addEventListener('change', (e) => { state.form.ocrDpi = e.target.value; save(); });
+  qa('[data-cv-ocr-out]', root).forEach((node) => {
+    node.addEventListener('click', () => {
+      state.form.ocrOutput = node.dataset.cvOcrOut;
+      qa('[data-cv-ocr-out]', root).forEach((n) => {
+        const on = n === node;
+        n.classList.toggle('is-on', on);
+        n.setAttribute('aria-pressed', String(on));
+      });
+      save();
+    });
+  });
+  q('#cvOcrGo', root)?.addEventListener('click', () => runOcr(root));
 }
 
 function acceptFor(mode) {
@@ -360,7 +447,7 @@ function paintMode(root) {
   qa('[data-cv-panel]', root).forEach((panel) => {
     panel.hidden = panel.dataset.cvPanel !== state.form.mode;
   });
-  const needsPdf = state.form.mode === 'text' || state.form.mode === 'images-out';
+  const needsPdf = state.form.mode === 'text' || state.form.mode === 'images-out' || state.form.mode === 'ocr';
   q('[data-stage="images"]', root).hidden = needsPdf;
   q('[data-stage="pdf"]', root).hidden = !needsPdf;
   q('#cvDropTitle', root).textContent = needsPdf ? 'Drop a PDF' : 'Drop images here';
@@ -804,4 +891,101 @@ async function shrinkImages(root) {
     const saved = before ? Math.max(0, Math.round((1 - after / before) * 100)) : 0;
     toast(`${names.length} images ready — about ${saved}% smaller.`);
   });
+}
+
+/* -------------------------------------------------- OCR mode ---- */
+/* "OCR for scans" — render each PDF page to a canvas, run Tesseract.js on
+   the image, and either add the recognized text as a hidden layer (so the
+   PDF stays an image but becomes searchable) or write the text out on its
+   own. The foundation commit wires the panel, the worker load, the
+   language picker, the page range, and the progress UI; the actual
+   searchable-PDF and text-only writers land in the next two commits. */
+
+async function ensureOcrWorker(root) {
+  const lang = state.form.ocrLang || 'eng';
+  if (state.ocrWorker && state.ocrWorkerLang === lang) return state.ocrWorker;
+  if (state.ocrWorker) {
+    try { await state.ocrWorker.terminate(); } catch (_) {}
+    state.ocrWorker = null;
+  }
+  const status = q('#cvOcrStatus', root);
+  if (status) status.textContent = `Loading ${lang} model…`;
+  const Tesseract = await import('tesseract.js');
+  const worker = await Tesseract.createWorker(lang, undefined, {
+    logger: (m) => {
+      if (!status) return;
+      if (m.status === 'recognizing text' && typeof m.progress === 'number') {
+        const pct = Math.round(m.progress * 100);
+        setOcrProgress(root, pct);
+        status.textContent = `Recognising… ${pct}%`;
+      } else if (typeof m.status === 'string' && m.status.length < 60) {
+        status.textContent = m.status;
+      }
+    },
+  });
+  state.ocrWorker = worker;
+  state.ocrWorkerLang = lang;
+  return worker;
+}
+
+function setOcrProgress(root, pct) {
+  const fill = q('#cvOcrBarFill', root);
+  const wrap = q('#cvOcrProgress', root);
+  if (wrap) wrap.hidden = false;
+  if (fill) fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+}
+
+function hideOcrProgress(root) {
+  const wrap = q('#cvOcrProgress', root);
+  if (wrap) wrap.hidden = true;
+  const fill = q('#cvOcrBarFill', root);
+  if (fill) fill.style.width = '0%';
+}
+
+async function ocrRenderPageToCanvas(pdfDoc, pageIndex, dpi) {
+  // Render at the given DPI (default render scale 1 = 72 dpi)
+  const page = await pdfDoc.getPage(pageIndex);
+  const scale = dpi / 72;
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(viewport.width);
+  canvas.height = Math.round(viewport.height);
+  const ctx = canvas.getContext('2d');
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  return { canvas, width: viewport.width, height: viewport.height, pageW: page.getViewport({ scale: 1 }).width, pageH: page.getViewport({ scale: 1 }).height };
+}
+
+async function runOcr(root) {
+  if (state.pdfs.length === 0) { toast('Drop a scanned PDF first'); return; }
+  const pdf = state.pdfs[0];
+  if (state.busy) return;
+  state.busy = true;
+  const button = q('#cvOcrGo', root);
+  if (button) button.disabled = true;
+  try {
+    const pdfjs = await loadPdfJs();
+    const doc = await pdfjs.getDocument({ data: pdf.data.slice(0), ...pdfjsAssetOptions() }).promise;
+    const ranges = parsePageRanges(state.form.ocrPages || 'all', doc.numPages);
+    if (!ranges.length) { toast('No pages match that range'); return; }
+    const worker = await ensureOcrWorker(root);
+    const status = q('#cvOcrStatus', root);
+    if (status) status.textContent = `Loaded model — processing ${ranges.length} page${ranges.length === 1 ? '' : 's'}`;
+    setOcrProgress(root, 0);
+    // The actual writers (searchable PDF / plain text) land in the next commits.
+    for (let i = 0; i < ranges.length; i += 1) {
+      const pageNum = ranges[i];
+      if (status) status.textContent = `Recognising page ${i + 1} of ${ranges.length}…`;
+      const { canvas } = await ocrRenderPageToCanvas(doc, pageNum, Number(state.form.ocrDpi) || 300);
+      await worker.recognize(canvas);
+    }
+    if (status) status.textContent = 'Done — the writer lands in the next commit.';
+    toast('OCR ran. The PDF/text writer lands in the next commit.');
+  } catch (err) {
+    console.error('ocr: failed', err);
+    toast('OCR failed — check the console');
+  } finally {
+    if (button) button.disabled = false;
+    state.busy = false;
+    setTimeout(() => hideOcrProgress(root), 1500);
+  }
 }

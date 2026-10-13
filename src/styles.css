@@ -487,6 +487,11 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 .lab-batch-meta code { font-family: var(--mono); font-size: 9px; color: #4a5044; background: #ecedde; padding: 1px 5px; border-radius: 3px; }
 .lab-batch-tag { padding: 1px 6px; border-radius: 3px; background: #e9e6d8; color: #6a7064; }
 .lab-batch-tag.is-warn { background: #f3e2c4; color: #8a6a3a; }
+/* OCR progress bar */
+.cv-ocr-progress { display: grid; gap: 6px; }
+.cv-ocr-bar { height: 8px; border-radius: 5px; background: #e9e6d8; overflow: hidden; }
+.cv-ocr-bar-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #5e8064, #789864); transition: width .12s ease; }
+.cv-ocr-status { margin: 0; font-size: 10px; color: #6a7064; font-family: var(--mono); }
 /* Bookmarks tree — like a file manager's outline view */
 .lab-bookmark-tree { display: block; min-height: 40px; max-height: 360px; overflow: auto; padding: 6px 4px; border: 1px dashed var(--line, #d8d3c2); border-radius: 8px; background: rgba(255,255,255,.4); }
 .lab-bookmark-tree:empty::before { content: "Read an outline to see the tree"; color: #8a8e80; font-size: 10px; padding: 12px; display: block; }
