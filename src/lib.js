@@ -1,345 +1,342 @@
-// Shared utilities for the Folio studio. Anything that more than one tool
-// (Markdown → PDF, PDF Lab, Translate, Converter, Portfolio, Sign, Finish)
-// might reach for lives here. The goal is a thin, dependency-free module
-// that tools can pull in without pulling in a whole tab's worth of code.
-//
-// Conventions:
-//   * Functions are pure where possible.
-//   * Anything that touches the DOM goes through the small helpers below
-//     so the rest of the code reads like markup, not querySelector chains.
-//   * Toasts, file pickers, lazy loaders, and localStorage prefs all live
-//     in one place so a future refactor (e.g. swapping localStorage for
-//     IndexedDB) only changes this file.
+/* Shared helpers for every Folio tool: DOM, files, formatting, and lazy
+   loading of the heavier PDF libraries. Works both as an ES module (Vite) and
+   as a classic script (open index.html straight from disk). */
 
-const NS = 'http://www.w3.org/2000/svg';
-const XHTML_NS = 'http://www.w3.org/1999/xhtml';
-
-const SVG_TAGS = new Set(['svg', 'g', 'path', 'rect', 'circle', 'line', 'polyline', 'polygon', 'text', 'defs', 'use', 'symbol', 'tspan', 'title', 'desc']);
-
-// ---------------------------------------------------------------------------
-// Tiny DOM helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Create an element with attributes and children.
- *
- *   h('button', { class: 'btn', onClick }, 'Save')
- *   h('div', { class: 'row' }, [h('span', null, 'hi'), h('span', null, 'there')])
- *
- * Children can be strings, numbers, nodes, or arrays of any of those.
- * `null` / `undefined` / `false` are skipped. Event handlers are wired up
- * if the key starts with `on` (e.g. `onClick`, `onInput`).
- */
-export function h(tag, attrs = null, children = null) {
-  const el = SVG_TAGS.has(tag.toLowerCase())
-    ? document.createElementNS(NS, tag)
-    : document.createElement(tag);
-  if (attrs) {
-    for (const [key, value] of Object.entries(attrs)) {
-      if (value == null || value === false) continue;
-      if (key === 'class' || key === 'className') {
-        el.setAttribute('class', value);
-      } else if (key === 'style' && typeof value === 'object') {
-        Object.assign(el.style, value);
-      } else if (key === 'dataset' && typeof value === 'object') {
-        for (const [k, v] of Object.entries(value)) {
-          if (v != null) el.dataset[k] = v;
-        }
-      } else if (key === 'html') {
-        el.innerHTML = value;
-      } else if (key.startsWith('on') && typeof value === 'function') {
-        el.addEventListener(key.slice(2).toLowerCase(), value);
-      } else if (key === 'checked' || key === 'disabled' || key === 'selected' || key === 'hidden' || key === 'open') {
-        if (value) el.setAttribute(key, '');
-      } else if (key === 'value' && el.tagName === 'TEXTAREA') {
-        el.value = value;
-      } else if (key === 'value' && (el.tagName === 'INPUT' || el.tagName === 'SELECT')) {
-        el.value = value;
-      } else {
-        el.setAttribute(key, value);
-      }
-    }
-  }
-  appendChildren(el, children);
-  return el;
-}
-
-function appendChildren(parent, children) {
-  if (children == null || children === false) return;
-  if (Array.isArray(children)) {
-    for (const c of children) appendChildren(parent, c);
-    return;
-  }
-  if (children instanceof Node) {
-    parent.append(children);
-    return;
-  }
-  parent.append(document.createTextNode(String(children)));
-}
-
-export function clear(node) {
-  while (node && node.firstChild) node.removeChild(node.firstChild);
-}
-
-export function $(selector, root = document) {
+/* -------------------------------------------------- tiny DOM helpers ---- */
+export function q(selector, root = document) {
   return root.querySelector(selector);
 }
 
-export function $$(selector, root = document) {
+export function qa(selector, root = document) {
   return Array.from(root.querySelectorAll(selector));
 }
 
-export function on(target, type, handler, options) {
-  if (!target) return () => {};
-  target.addEventListener(type, handler, options);
-  return () => target.removeEventListener(type, handler, options);
+export function el(tag, attrs = {}, children = []) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value === false || value === null || value === undefined || value === '') continue;
+    if (key === 'class') node.className = value;
+    else if (key === 'text') node.textContent = value;
+    else if (key === 'html') node.innerHTML = value;
+    else if (key === 'dataset') Object.assign(node.dataset, value);
+    else if (key.startsWith('on') && typeof value === 'function') node.addEventListener(key.slice(2), value);
+    else node.setAttribute(key, value === true ? '' : String(value));
+  }
+  for (const child of [].concat(children)) {
+    if (child === null || child === undefined || child === false) continue;
+    node.append(child.nodeType ? child : document.createTextNode(String(child)));
+  }
+  return node;
 }
 
-// ---------------------------------------------------------------------------
-// File pickers
-// ---------------------------------------------------------------------------
+export function escapeHtml(value = '') {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
-/**
- * Open the native file picker with a given accept list and resolve with the
- * chosen file (or null on cancel). Re-uses a single hidden `<input>` per
- * call site to keep the call shape predictable.
- */
-export function pickFile({ accept = '', multiple = false } = {}) {
+/* ------------------------------------------------------- notifications ---- */
+let toastTimer;
+export function toast(message, isError = false) {
+  const node = q('#toast');
+  if (!node) {
+    console[isError ? 'error' : 'log'](`[folio] ${message}`);
+    return;
+  }
+  window.clearTimeout(toastTimer);
+  node.textContent = message;
+  node.classList.toggle('is-error', Boolean(isError));
+  node.classList.add('is-visible');
+  toastTimer = window.setTimeout(() => node.classList.remove('is-visible'), 3400);
+}
+window.folioToast = toast;
+
+/* ------------------------------------------------------------ files ---- */
+export function bytes(size) {
+  if (!Number.isFinite(size)) return '—';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(Math.max(size, 1)) / Math.log(1024)));
+  const value = size / 1024 ** index;
+  return `${value >= 100 || index === 0 ? Math.round(value) : value.toFixed(1)} ${units[index]}`;
+}
+
+/** Trigger a browser download for a Blob without touching the network. */
+export function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const link = el('a', { href: url, download: name });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+export function safeFileName(name, extension) {
+  const base = String(name || 'document').replace(/\.[a-z0-9]+$/i, '').trim() || 'document';
+  const cleaned = base
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return `${cleaned || 'document'}.${extension}`;
+}
+
+/** Opens the native picker without a visible trigger button. */
+export function pickFiles({ accept = '', multiple = true } = {}) {
   return new Promise((resolve) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    if (accept) input.accept = accept;
-    input.multiple = multiple;
-    input.style.position = 'fixed';
-    input.style.left = '-9999px';
-    let resolved = false;
-    const cleanup = () => {
-      if (input.parentNode) input.parentNode.removeChild(input);
-    };
+    const input = el('input', { type: 'file', accept, multiple, hidden: true });
     input.addEventListener('change', () => {
-      resolved = true;
-      cleanup();
-      if (multiple) resolve(Array.from(input.files || []));
-      else resolve(input.files && input.files[0] ? input.files[0] : null);
+      resolve(Array.from(input.files || []));
+      input.remove();
     });
-    // The cancel event isn't reliable across browsers; fall back to focus.
-    window.addEventListener('focus', () => {
-      setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          cleanup();
-          resolve(multiple ? [] : null);
-        }
-      }, 400);
-    }, { once: true });
     document.body.append(input);
     input.click();
   });
 }
 
-/**
- * Read a File as ArrayBuffer. Used by every PDF tool before handing bytes
- * to pdf-lib / pdf.js.
- */
-export function readFileBytes(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(new Uint8Array(reader.result));
-    reader.onerror = () => reject(reader.error || new Error('File read failed'));
-    reader.readAsArrayBuffer(file);
-  });
+/* Keep drop zones honest: only react when real files are dragged. */
+export function hasFiles(event) {
+  return Array.from((event.dataTransfer && event.dataTransfer.types) || []).includes('Files');
 }
 
-/**
- * Read a File as text (UTF-8 by default).
- */
-export function readFileText(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('File read failed'));
-    reader.readAsText(file, 'utf-8');
-  });
-}
-
-/**
- * Read a File as a data URL (for image previews).
- */
-export function readFileDataURL(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('File read failed'));
-    reader.readAsDataURL(file);
-  });
-}
-
-/**
- * Trigger a browser download of a Blob. `filename` is sanitised lightly
- * (no path separators, no control chars).
- */
-export function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = sanitizeFilename(filename);
-  document.body.append(a);
-  a.click();
-  setTimeout(() => {
-    if (a.parentNode) a.parentNode.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, 0);
-}
-
-export function sanitizeFilename(name) {
-  if (!name) return 'document';
-  return String(name)
-    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^[-.]+|[-.]+$/g, '') || 'document';
-}
-
-// ---------------------------------------------------------------------------
-// Toasts
-// ---------------------------------------------------------------------------
-
-let toastEl = null;
-let toastTimer = null;
-
-/**
- * Show a short message in the bottom-right. Errors get a red style.
- * Re-calling replaces the previous toast before its timer expires.
- */
-export function showToast(message, { error = false, duration = 3200 } = {}) {
-  if (!toastEl) {
-    toastEl = document.createElement('div');
-    toastEl.className = 'toast';
-    toastEl.setAttribute('role', 'status');
-    toastEl.setAttribute('aria-live', 'polite');
-    document.body.append(toastEl);
+/* ---------------------------------------------------------- numbers ---- */
+/** "1-3,7,10-" style page lists -> [{start, end}] with 1-based, inclusive ends. */
+export function parsePageRanges(input, pageCount) {
+  const text = String(input || '').trim();
+  if (!text || /^(all|every|full|\*)$/i.test(text)) {
+    return { ranges: pageCount ? [{ start: 1, end: pageCount }] : [], ok: true };
   }
-  toastEl.textContent = message;
-  toastEl.classList.toggle('is-error', !!error);
-  toastEl.classList.add('is-visible');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    if (toastEl) toastEl.classList.remove('is-visible');
-  }, duration);
+  const ranges = [];
+  const errors = [];
+  for (const part of text.split(/[,;]/)) {
+    const piece = part.trim();
+    if (!piece) continue;
+    const match = /^(\d+)?\s*(?:-|–|to)\s*(\d+)?$|^\s*(\d+)\s*$/i.exec(piece);
+    if (!match) {
+      errors.push(piece);
+      continue;
+    }
+    const isRange = piece.includes('-') || piece.includes('–') || /to/i.test(piece);
+    let start;
+    let end;
+    if (isRange) {
+      start = match[1] ? Number(match[1]) : 1;
+      end = match[2] ? Number(match[2]) : pageCount;
+    } else {
+      start = end = Number(match[3]);
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end > pageCount || start > end) {
+      errors.push(piece);
+      continue;
+    }
+    ranges.push({ start, end });
+  }
+  ranges.sort((a, b) => a.start - b.start);
+  return { ranges: mergeRanges(ranges), ok: errors.length === 0, errors };
 }
 
-// ---------------------------------------------------------------------------
-// Lazy loaders
-// ---------------------------------------------------------------------------
+function mergeRanges(list) {
+  const out = [];
+  for (const range of list) {
+    const last = out[out.length - 1];
+    if (last && range.start <= last.end + 1) last.end = Math.max(last.end, range.end);
+    else out.push({ ...range });
+  }
+  return out;
+}
 
-const loaderCache = new Map();
+export function rangeLabel(ranges, pageCount) {
+  if (!ranges.length) return 'no pages';
+  const total = ranges.reduce((sum, r) => sum + (r.end - r.start + 1), 0);
+  const text = ranges.map((r) => (r.start === r.end ? `${r.start}` : `${r.start}–${r.end}${r.end === pageCount ? '' : ''}`)).join(', ');
+  return `${text} · ${total} ${total === 1 ? 'page' : 'pages'}`;
+}
 
-/**
- * Memoised async module loader. Use for any heavy dependency that should
- * only be pulled in when the relevant tab is opened.
- *
- *   const loadPdfLib = lazy(() => import('pdf-lib'));
- *   const { PDFDocument } = await loadPdfLib();
- */
-export function lazy(loader) {
-  return () => {
-    if (loaderCache.has(loader)) return loaderCache.get(loader);
-    const promise = loader().then((mod) => {
-      loaderCache.set(loader, mod);
-      return mod;
+/* -------------------------------------------------------------- misc ---- */
+export function debounce(fn, wait = 200) {
+  let timer;
+  return (...args) => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => fn(...args), wait);
+  };
+}
+
+export function progress({ bar, label }) {
+  return (value, text) => {
+    if (bar) bar.style.width = `${Math.max(0, Math.min(100, value * 100))}%`;
+    if (label && text) label.textContent = text;
+  };
+}
+
+
+export const isFileProtocol = window.location.protocol === 'file:';
+
+/* Anything the bundler can resolve for us is pushed in here by src/main.js;
+   when index.html is opened straight from disk, the inline script hands over
+   the UMD globals on window instead. */
+export const injected = {
+  marked: null,
+  DOMPurify: null,
+  PDFLib: null,
+  pdfjs: null,
+  zip: null,
+  pdfjsAssets: null,
+  loadPdfLib: null,
+  loadPdfJs: null,
+  loadZip: null,
+  loadHtml2Pdf: null,
+};
+
+function loadClassicScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = el('script', { src });
+    script.onload = () => resolve(true);
+    script.onerror = () => {
+      script.remove();
+      reject(new Error(`Could not load ${src}`));
+    };
+    document.head.append(script);
+  });
+}
+
+let pdfLibPromise;
+export function loadPdfLib() {
+  if (injected.PDFLib) return Promise.resolve(injected.PDFLib);
+  if (isFileProtocol) {
+    pdfLibPromise ??= loadClassicScript('./node_modules/pdf-lib/dist/pdf-lib.min.js').then(() => {
+      if (!window.PDFLib) throw new Error('pdf-lib did not load.');
+      return window.PDFLib;
     });
-    loaderCache.set(loader, promise);
-    return promise;
+    return pdfLibPromise;
+  }
+  pdfLibPromise ??= injected.loadPdfLib ? injected.loadPdfLib() : import('pdf-lib');
+  return pdfLibPromise;
+}
+
+let pdfJsPromise;
+export function loadPdfJs() {
+  if (injected.pdfjs) return Promise.resolve(injected.pdfjs);
+  if (isFileProtocol) {
+    return Promise.reject(new Error('Reading a PDF from disk needs the dev server — run `npm run dev` and open http://localhost:5173/.'));
+  }
+  pdfJsPromise ??= injected.loadPdfJs();
+  return pdfJsPromise;
+}
+
+/** Extra getDocument() options (character maps, standard fonts) for odd PDFs. */
+export function pdfjsAssetOptions() {
+  return injected.pdfjsAssets ?? {};
+}
+
+/** Open a PDF for reading, with the shared asset hints applied. */
+export async function openPdfDocument(buffer) {
+  const pdfjs = await loadPdfJs();
+  return pdfjs.getDocument({ data: buffer, isEvalSupported: false, ...pdfjsAssetOptions() }).promise;
+}
+
+let zipPromise;
+export async function loadZip() {
+  if (injected.zip) return injected.zip;
+  const fflate = injected.loadZip ? await injected.loadZip() : await import('fflate');
+  return { zip: fflate.zip, zipSync: fflate.zipSync };
+}
+
+let html2pdfPromise;
+export function loadHtml2PdfBridge() {
+  if (isFileProtocol && window.html2pdf) return Promise.resolve(window.html2pdf);
+  if (!injected.loadHtml2Pdf) {
+    return Promise.reject(new Error('The PDF writer is not available in this mode.'));
+  }
+  html2pdfPromise ??= injected.loadHtml2Pdf();
+  return html2pdfPromise;
+}
+
+
+export async function makeZip(entries) {
+  const { zip } = await loadZip();
+  return new Promise((resolve, reject) => {
+    zip(entries, { level: 0 }, (error, data) => (error ? reject(error) : resolve(new Blob([data], { type: 'application/zip' }))));
+  });
+}
+
+/** Decode an image file once: a blob URL plus its natural size. */
+export function readImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      resolve({
+        url,
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+        name: file.name,
+        size: file.size,
+        type: file.type || 'image/*',
+        image,
+      });
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(`${file.name || 'That image'} could not be decoded.`));
+    };
+    image.src = url;
+  });
+}
+
+/** Re-encode an image to JPEG/PNG data URL at a bounded size — used for previews and PDF payloads. */
+export function rasterize(source, { maxSize = 2200, quality = 0.9, type = 'image/jpeg', background = '#ffffff' } = {}) {
+  const { image, width, height } = source;
+  const scale = Math.min(1, maxSize / Math.max(width, height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  const context = canvas.getContext('2d');
+  if (type === 'image/jpeg') {
+    context.fillStyle = background;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const dataUrl = canvas.toDataURL(type, quality);
+  return { dataUrl, width: canvas.width, height: canvas.height };
+}
+
+/* ------------------------------------------------------------ state ---- */
+export function store(key, fallback) {
+  const storageKey = `folio:${key}`;
+  return {
+    read() {
+      try {
+        const raw = window.localStorage.getItem(storageKey);
+        return raw ? { ...fallback, ...JSON.parse(raw) } : { ...fallback };
+      } catch (error) {
+        console.warn(`Folio could not read "${key}" from local storage:`, error);
+        return { ...fallback };
+      }
+    },
+    write(value) {
+      try {
+        window.localStorage.setItem(storageKey, JSON.stringify(value));
+        return true;
+      } catch (error) {
+        console.warn(`Folio could not save "${key}" locally:`, error);
+        return false;
+      }
+    },
   };
 }
 
-// ---------------------------------------------------------------------------
-// localStorage preferences
-// ---------------------------------------------------------------------------
-
-/**
- * Tiny localStorage wrapper with JSON encoding. Falls back to an
- * in-memory map when storage is unavailable (private mode, quota).
- */
-const memoryStore = new Map();
-
-function storageAvailable() {
-  try {
-    const k = '__folio_probe__';
-    window.localStorage.setItem(k, '1');
-    window.localStorage.removeItem(k);
-    return true;
-  } catch (error) {
-    return false;
-  }
-}
-
-const hasStorage = typeof window !== 'undefined' && storageAvailable();
-
-export function readPref(key, fallback = null) {
-  try {
-    const raw = hasStorage
-      ? window.localStorage.getItem(`folio:${key}`)
-      : memoryStore.get(key);
-    if (raw == null) return fallback;
-    return JSON.parse(raw);
-  } catch (error) {
-    console.warn('readPref failed:', key, error);
-    return fallback;
-  }
-}
-
-export function writePref(key, value) {
-  try {
-    const raw = JSON.stringify(value);
-    if (hasStorage) window.localStorage.setItem(`folio:${key}`, raw);
-    else memoryStore.set(key, raw);
-    return true;
-  } catch (error) {
-    console.warn('writePref failed:', key, error);
-    return false;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Misc small utilities
-// ---------------------------------------------------------------------------
-
-export function clamp(value, min, max) {
-  if (value < min) return min;
-  if (value > max) return max;
-  return value;
-}
-
-export function formatBytes(bytes) {
-  if (!Number.isFinite(bytes)) return '–';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
-}
-
-export function formatDate(value) {
-  if (!value) return '';
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
-export function debounce(fn, delay = 200) {
-  let timeout;
-  const debounced = (...args) => {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => fn(...args), delay);
-  };
-  debounced.cancel = () => clearTimeout(timeout);
-  return debounced;
-}
-
-export function uniqueId(prefix = 'id') {
-  return `${prefix}-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36)}`;
+/** Shared placeholder block used by every tool's empty state. */
+export function emptyState({ title, note, action } = {}) {
+  return el('div', { class: 'empty-preview' }, [
+    el('div', {
+      class: 'empty-icon',
+      'aria-hidden': 'true',
+      html: '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M12 7.5h16l8 8V40H12V7.5Z"/><path d="M28 8v8h8M18 23h12M18 28h12M18 33h7" stroke-linecap="round"/></svg>',
+    }),
+    el('strong', { text: title }),
+    el('span', { text: note }),
+    action || null,
+  ]);
 }

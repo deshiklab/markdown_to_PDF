@@ -3,7 +3,8 @@ name: Deploy Folio preview
 on:
   push:
     branches:
-      - arena/1706a162-markdown-to-pdf
+      - main
+      - arena/0fa301ce-markdown-to-pdf
   workflow_dispatch:
 
 permissions:

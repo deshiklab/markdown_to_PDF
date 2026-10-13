@@ -1,352 +1,364 @@
-// Studio shell. Owns the tab strip, hash routing (`#/pdf-lab` etc.),
-// keyboard roving focus, the panel switcher on phones, per-tab intro
-// lines, and the scroll-into-view behaviour that keeps the active tab
-// card fully visible after fonts load and after a resize.
-//
-// The shell does NOT know anything about the tools themselves — each
-// tool is registered with `registerTab({ id, label, description,
-//   load })` and gets a `<section>` to mount into. This keeps the
-// Markdown → PDF editor independent of PDF Lab, Sign, etc. so a bug in
-// one tab can't take the others down.
+/* Tab controller for the Folio suite: hash routing, lazy tool mounting,
+   ARIA-correct keyboard navigation, and the mobile editor/preview switch. */
+import { el, q, qa, store } from './lib.js';
+import { mountControls, printSheet } from './page.js';
 
-import { h, $, $$, on } from './lib.js';
+const TOOL_IDS = ['markdown', 'pdf-lab', 'translate', 'convert', 'portfolio', 'finish', 'sign'];
+const LABELS = {
+  markdown: 'Markdown to PDF',
+  'pdf-lab': 'PDF Lab',
+  translate: 'Translate PDF',
+  convert: 'Converter',
+  portfolio: 'Photo Portfolio',
+  finish: 'Finish',
+  sign: 'Sign',
+};
 
-const TAB_STRIP_ID = 'toolNavScroll';
-const STRIP_FADE_LEFT = 'toolNavFadeLeft';
-const STRIP_FADE_RIGHT = 'toolNavFadeRight';
-const PREV_BTN_ID = 'toolNavPrev';
-const NEXT_BTN_ID = 'toolNavNext';
-const PANEL_ID = 'toolPanel';
-const SWITCHER_ID = 'toolSwitcher';
-const INTRO_ID = 'toolIntro';
-const MOBILE_BREAKPOINT = 900;
+const INTRO = {
+  markdown: {
+    eyebrow: 'Seven tools, one page',
+    title: 'Markdown, meet<br /><em>your best side.</em>',
+    note: 'Write a document, wrangle a PDF, translate a page, convert a stack of photos, lay out a portfolio, put the finishing touches on, or sign it — all in this tab, with nothing uploaded.',
+  },
+  'pdf-lab': {
+    eyebrow: 'PDF Lab',
+    title: 'Stitch, split and stamp<br /><em>in one pass.</em>',
+    note: 'Drop a few PDFs, drag pages into the order you want, pull a chapter out, or mark the whole thing DRAFT. pdf-lib does the work here in the tab.',
+  },
+  translate: {
+    eyebrow: 'Live translate',
+    title: 'Your document, read<br /><em>in another tongue.</em>',
+    note: 'Text is pulled out page by page, sent to the provider you choose, and written back onto a fresh PDF you can keep — with a glossary for the words that must not move.',
+  },
+  convert: {
+    eyebrow: 'Converter',
+    title: 'Photos in, pages out —<br /><em>both directions.</em>',
+    note: 'Turn camera roll shots into a tidy PDF, lift text out of a document, print every page as an image, or shrink a stack of photos before you send them.',
+  },
+  portfolio: {
+    eyebrow: 'Photo portfolio',
+    title: 'A folder of frames,<br /><em>a book worth printing.</em>',
+    note: 'Choose a layout and a paper size and Folio sets your photographs into cover, plates and colophon — then exports it as one PDF.',
+  },
+  finish: {
+    eyebrow: 'Finish',
+    title: 'The last pass<br /><em>before it goes out.</em>',
+    note: 'Set the document fields, stamp page numbers where a footer belongs, black out what must not be read, and take a checksum of the exact bytes you are sending.',
+  },
+  sign: {
+    eyebrow: 'Sign',
+    title: 'Put your name<br /><em>on the line.</em>',
+    note: 'Draw a signature once, keep it in this browser, then place it on the dotted line with a name, a title and a date under it — the second pad is for whoever is countersigning.',
+  },
+};
 
-const tabs = new Map();
-let currentTabId = null;
-let activeInstance = null;
-let initialScrollAligned = false;
-let pendingIntro = null;
-let host = null;
+const state = { active: null, mounted: new Set(), loading: new Map() };
+const panelPrefs = store('panels:v1', {});
 
-export function registerTab(definition) {
-  if (!definition || !definition.id) {
-    throw new Error('registerTab requires a tab definition with an id.');
-  }
-  tabs.set(definition.id, definition);
-  if (currentTabId === null) currentTabId = definition.id;
+function currentHashId() {
+  const raw = (window.location.hash || '').replace(/^#\/?/, '').trim();
+  const [id] = raw.split('/');
+  return TOOL_IDS.includes(id) ? id : 'markdown';
 }
 
-export function getRegisteredTabs() {
-  return Array.from(tabs.values());
+function keepActiveTabVisible(scroller = q('#toolNav .tool-nav-scroll'), smooth = true) {
+  const tab = tabs().find((node) => node.classList.contains('is-active'));
+  if (!scroller || !tab) return;
+  /* The strip fades its last 14px away and the active card is the one the
+     customer is standing on, so it has to sit fully inside — on load, after a
+     rotate, and after the web font re-measures every card. Cards carry
+     `scroll-snap-align: center`, so the centred position is the one the
+     browser leaves alone: aim for it rather than the minimum nudge, or the
+     snap slides the card back out of view. Client rects, not offsetLeft — the
+     tabs' offset parent is the scroller only by accident — and the container
+     scrolls, never `scrollIntoView`, so the page itself does not jump. */
+  const edge = 14;
+  const box = scroller.getBoundingClientRect();
+  const card = tab.getBoundingClientRect();
+  if (card.left >= box.left + edge && card.right <= box.right - edge) return;
+  const limit = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+  const target = Math.max(0, Math.min(scroller.scrollLeft + (card.left + card.width / 2) - (box.left + box.width / 2), limit));
+  if (Math.abs(target - scroller.scrollLeft) < 1) return;
+  scroller.scrollTo({ left: target, behavior: motionOk() && smooth ? 'smooth' : 'auto' });
 }
 
-export function getCurrentTabId() {
-  return currentTabId;
+function tabs() {
+  return qa('#toolNav [data-tool]');
 }
 
-/**
- * Mount the studio shell into `root`. The root element is the
- * `app-shell` from index.html, or any element that contains the
- * `<main>` we want to add the tab strip above.
- */
-export function mountStudioShell(root) {
-  host = root;
-
-  // Inject the tab strip, the panel wrapper, and the per-tab intro
-  // INSIDE the existing `.studio` container so the section's padding
-  // and the studio heading stay where the page chrome expects them.
-  const main = $('#top', root) || $('main', root);
-  if (!main) throw new Error('Studio shell needs a <main id="top"> to mount into.');
-
-  const studio = $('#workspace', main);
-  if (!studio) {
-    throw new Error('Studio shell needs an element with id="workspace" inside <main>.');
-  }
-
-  // The original workbench markup is gone (the Markdown tool now
-  // builds it on mount). Find the studio-heading (or the first child)
-  // and insert the shell pieces after it.
-  const heading = $('.studio-heading', studio);
-  const anchor = heading ? heading.nextSibling : studio.firstChild;
-
-  const intro = buildIntro();
-  const strip = buildTabStrip();
-  const panel = buildPanel();
-
-  if (anchor) {
-    studio.insertBefore(panel, anchor);
-    studio.insertBefore(strip, panel);
-    studio.insertBefore(intro, strip);
-  } else {
-    studio.append(intro, strip, panel);
-  }
-
-  wireStripArrows();
-  wireKeyboard();
-  wireResize();
-
-  // Honour any hash in the URL, otherwise default to the first tab.
-  const initial = parseHash() || currentTabId;
-  switchTab(initial, { replace: true });
-
-  // Web fonts can change card widths after first paint; re-centre then.
-  if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(() => {
-      initialScrollAligned = true;
-      keepActiveTabVisible();
-    });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Tab strip
-// ---------------------------------------------------------------------------
-
-function buildTabStrip() {
-  const strip = h('div', { class: 'tool-nav', role: 'navigation', 'aria-label': 'Studio tabs' }, [
-    h('button', {
-      class: 'tool-nav-arrow tool-nav-arrow-prev',
-      id: PREV_BTN_ID,
-      type: 'button',
-      'aria-label': 'Scroll tabs left',
-      'aria-controls': TAB_STRIP_ID,
-    }, arrowLeft()),
-    h('div', { class: 'tool-nav-fade tool-nav-fade-left', id: STRIP_FADE_LEFT, 'aria-hidden': 'true' }),
-    h('div', { class: 'tool-nav-scroll', id: TAB_STRIP_ID, tabindex: '0', role: 'tablist' },
-      Array.from(tabs.values()).map((tab) => buildTabCard(tab))
-    ),
-    h('div', { class: 'tool-nav-fade tool-nav-fade-right', id: STRIP_FADE_RIGHT, 'aria-hidden': 'true' }),
-    h('button', {
-      class: 'tool-nav-arrow tool-nav-arrow-next',
-      id: NEXT_BTN_ID,
-      type: 'button',
-      'aria-label': 'Scroll tabs right',
-      'aria-controls': TAB_STRIP_ID,
-    }, arrowRight()),
-  ]);
-
-  return strip;
-}
-
-function buildTabCard(tab) {
-  return h('button', {
-    class: 'tool-nav-card',
-    type: 'button',
-    role: 'tab',
-    id: `tool-tab-${tab.id}`,
-    'aria-controls': PANEL_ID,
-    'data-tab-id': tab.id,
-    'aria-selected': 'false',
-    onClick: () => switchTab(tab.id),
-  }, [
-    h('span', { class: 'tool-nav-card-index' }, tab.index || ''),
-    h('span', { class: 'tool-nav-card-body' }, [
-      h('span', { class: 'tool-nav-card-title' }, tab.label),
-      tab.description ? h('span', { class: 'tool-nav-card-sub' }, tab.description) : null,
-    ]),
-  ]);
-}
-
-function arrowLeft() {
-  return h('svg', { viewBox: '0 0 16 16', 'aria-hidden': 'true' },
-    h('path', { d: 'M10 3.5 5.5 8 10 12.5', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' })
-  );
-}
-
-function arrowRight() {
-  return h('svg', { viewBox: '0 0 16 16', 'aria-hidden': 'true' },
-    h('path', { d: 'M6 3.5 10.5 8 6 12.5', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' })
-  );
-}
-
-function buildIntro() {
-  return h('p', { class: 'tool-intro', id: INTRO_ID, 'aria-live': 'polite' });
-}
-
-function buildPanel() {
-  return h('section', { class: 'tool-panel', id: PANEL_ID, role: 'tabpanel', 'aria-live': 'polite' });
-}
-
-// ---------------------------------------------------------------------------
-// Tabs
-// ---------------------------------------------------------------------------
-
-/**
- * Switch to a tab by id. The previous tab's instance is given a chance
- * to teardown (so Sign can drop its canvas, PDF Lab can release pdf.js
- * documents, etc.). The new tab's `load()` is awaited and the panel is
- * filled with whatever it returns.
- */
-export async function switchTab(id, { replace = false } = {}) {
-  const tab = tabs.get(id);
-  if (!tab) {
-    console.warn(`Unknown tab id: ${id}`);
-    return;
-  }
-  if (id === currentTabId && activeInstance) {
-    // Already on this tab; still scroll the card into view and bail.
-    keepActiveTabVisible();
-    updateStripFades();
-    return;
-  }
-
-  // URL hash sync.
-  const newHash = `#${tab.id}`;
-  if (window.location.hash !== newHash) {
-    if (replace) {
-      history.replaceState(null, '', newHash);
-    } else {
-      history.pushState(null, '', newHash);
+function paintActive(id) {
+  document.body.dataset.tool = id;
+  for (const tool of TOOL_IDS) {
+    const isActive = tool === id;
+    const tab = q(`#tab-${tool}`);
+    const panel = q(`#panel-${tool}`);
+    if (tab) {
+      tab.classList.toggle('is-active', isActive);
+      tab.setAttribute('aria-selected', String(isActive));
+      tab.tabIndex = isActive ? 0 : -1;
+    }
+    if (panel) {
+      panel.hidden = !isActive;
+      panel.classList.toggle('is-active', isActive);
     }
   }
-
-  // Update selection state on the cards.
-  for (const card of $$(`#${TAB_STRIP_ID} .tool-nav-card`)) {
-    const selected = card.dataset.tabId === tab.id;
-    card.setAttribute('aria-selected', selected ? 'true' : 'false');
-    card.classList.toggle('is-active', selected);
-  }
-
-  // Update the intro line.
-  const intro = $(`#${INTRO_ID}`);
-  if (intro) {
-    intro.textContent = tab.intro || tab.description || '';
-  }
-
-  // Switch the panel.
-  if (activeInstance && typeof activeInstance.unmount === 'function') {
-    try { activeInstance.unmount(); } catch (error) { console.warn('Tab unmount failed:', error); }
-  }
-  activeInstance = null;
-
-  const panel = $(`#${PANEL_ID}`);
-  if (!panel) return;
-  panel.dataset.tabId = tab.id;
-  while (panel.firstChild) panel.removeChild(panel.firstChild);
-
-  if (tab.skeleton) {
-    panel.appendChild(tab.skeleton());
-  }
-
-  try {
-    const instance = await tab.load(panel);
-    activeInstance = instance || null;
-  } catch (error) {
-    console.error(`Failed to load tab ${tab.id}:`, error);
-    panel.appendChild(h('div', { class: 'tool-error' }, [
-      h('strong', null, 'That tool did not load.'),
-      h('p', null, error && error.message ? error.message : 'Try reloading the page.'),
-    ]));
-  }
-
-  currentTabId = tab.id;
   keepActiveTabVisible();
-  updateStripFades();
-}
-
-// ---------------------------------------------------------------------------
-// Scroll / arrow / keyboard behaviour
-// ---------------------------------------------------------------------------
-
-function wireStripArrows() {
-  const strip = $(`#${TAB_STRIP_ID}`);
-  const prev = $(`#${PREV_BTN_ID}`);
-  const next = $(`#${NEXT_BTN_ID}`);
-  if (!strip) return;
-  const scrollBy = (dir) => {
-    const card = strip.querySelector('.tool-nav-card');
-    const step = card ? card.getBoundingClientRect().width + 12 : 160;
-    strip.scrollBy({ left: step * dir, behavior: 'smooth' });
-  };
-  if (prev) prev.addEventListener('click', () => scrollBy(-1));
-  if (next) next.addEventListener('click', () => scrollBy(1));
-  strip.addEventListener('scroll', () => {
-    updateStripFades();
-    if (!initialScrollAligned) {
-      // After the first user-driven scroll, lock the centred position.
-      initialScrollAligned = true;
+  const intro = INTRO[id] ?? INTRO.markdown;
+  const introBlock = q('.intro');
+  if (introBlock && introBlock.dataset.tool !== id) {
+    introBlock.dataset.tool = id;
+    const eyebrow = q('.eyebrow-text', introBlock);
+    if (eyebrow) eyebrow.textContent = intro.eyebrow;
+    const heading = q('#page-title', introBlock);
+    if (heading) {
+      heading.innerHTML = intro.title;
+      heading.animate?.([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'ease-out' });
     }
-  });
-  // First-paint fade update after layout.
-  requestAnimationFrame(() => updateStripFades());
+    const note = q('.intro-copy > p', introBlock);
+    if (note) note.textContent = intro.note;
+  }
+  const title = id === 'markdown' ? 'Folio — Markdown to PDF, beautifully' : `Folio · ${LABELS[id]}`;
+  document.title = title;
+  const meta = q('meta[name="description"]');
+  if (meta) meta.setAttribute('content', `Folio ${LABELS[id]} — free, private tools that run in your browser.`);
 }
 
-function updateStripFades() {
-  const strip = $(`#${TAB_STRIP_ID}`);
-  if (!strip) return;
-  const left = $(`#${STRIP_FADE_LEFT}`);
-  const right = $(`#${STRIP_FADE_RIGHT}`);
-  const prev = $(`#${PREV_BTN_ID}`);
-  const next = $(`#${NEXT_BTN_ID}`);
-  const max = strip.scrollWidth - strip.clientWidth - 1;
-  const atStart = strip.scrollLeft <= 4;
-  const atEnd = strip.scrollLeft >= max - 4;
-  if (left) left.classList.toggle('is-active', !atStart);
-  if (right) right.classList.toggle('is-active', !atEnd);
-  if (prev) prev.disabled = atStart;
-  if (next) next.disabled = atEnd;
+/** Switching tabs while scrolled deep into a long tool should not leave the
+   new tool out of view, so bring the tab strip back to the top edge. */
+function liftToTabs() {
+  const nav = q('.tool-nav');
+  if (!nav) return;
+  const top = nav.getBoundingClientRect().top;
+  if (top >= -4 && top <= window.innerHeight * 0.5) return;
+  window.scrollTo({ top: window.scrollY + top - 8, behavior: motionOk() ? 'smooth' : 'auto' });
 }
 
-function wireKeyboard() {
-  const strip = $(`#${TAB_STRIP_ID}`);
-  if (!strip) return;
-  strip.addEventListener('keydown', (event) => {
-    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft' || event.key === 'Home' || event.key === 'End') {
-      event.preventDefault();
-      const cards = $$(`.tool-nav-card`, strip);
-      const currentIndex = cards.findIndex((card) => card.dataset.tabId === currentTabId);
-      let nextIndex = currentIndex;
-      if (event.key === 'ArrowRight') nextIndex = Math.min(cards.length - 1, currentIndex + 1);
-      if (event.key === 'ArrowLeft') nextIndex = Math.max(0, currentIndex - 1);
-      if (event.key === 'Home') nextIndex = 0;
-      if (event.key === 'End') nextIndex = cards.length - 1;
-      if (nextIndex !== currentIndex && cards[nextIndex]) {
-        cards[nextIndex].focus();
-        switchTab(cards[nextIndex].dataset.tabId);
-      }
-    }
+function motionOk() {
+  return !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function activate(id, { focus = false } = {}) {
+  const next = TOOL_IDS.includes(id) ? id : 'markdown';
+  state.active = next;
+  paintActive(next);
+  liftToTabs();
+  if (focus) q(`#tab-${next}`)?.focus({ preventScroll: true });
+  return next;
+}
+
+async function mountTool(id, loaders) {
+  const panel = q(`#panel-${id}`);
+  if (!panel) return false;
+  if (state.mounted.has(id)) return true;
+  const loader = loaders?.[id];
+  if (!loader) {
+    /* No loader means one of two things: the tab is the Markdown studio, which
+       app-core wires up from the markup already in index.html, or the tab was
+       added to TOOL_IDS and forgotten in main.js. Neither is a reason to
+       delete what is on screen — this branch used to write "this tool runs
+       through the dev server" over the studio, and the document typed into it
+       went with it. The panel is left exactly as it is, and a tab nobody
+       registered is named in the console where the mistake actually is. */
+    if (id !== 'markdown') console.warn(`Folio: nothing to mount for the "${id}" tab.`);
+    return false;
+  }
+  if (!state.loading.has(id)) {
+    state.loading.set(
+      id,
+      Promise.resolve()
+        .then(() => loader())
+        .then(async (module) => {
+          const start = module?.start ?? module?.default?.start;
+          if (typeof start !== 'function') throw new Error(`${id} did not export a start() function.`);
+          panel.innerHTML = '';
+          await start(panel);
+          state.mounted.add(id);
+          window.dispatchEvent(new CustomEvent('folio:tool-mounted', { detail: { id } }));
+          return true;
+        })
+        .catch((error) => {
+          state.loading.delete(id);
+          console.error(`Folio could not load the ${id} tool:`, error);
+          panel.innerHTML = '';
+          panel.append(
+            el('div', { class: 'tool-notice is-error' }, [
+              el('strong', { text: 'This tool could not start.' }),
+              el('p', { text: String(error?.message ?? error) }),
+              el('button', { class: 'button button-light', type: 'button', text: 'Try again' }),
+            ]),
+          );
+          q('.tool-notice .button', panel)?.addEventListener('click', () => mountTool(id, loaders));
+          return false;
+        }),
+    );
+  }
+  return state.loading.get(id);
+}
+
+function scrollNav(scroller, direction) {
+  const amount = Math.max(180, Math.round(scroller.clientWidth * 0.7));
+  scroller.scrollBy({ left: direction * amount, behavior: 'smooth' });
+}
+
+function buildNavArrows(nav, scroller) {
+  if (q('.tool-nav-arrows', nav)) return;
+  const path = { prev: '<path d="M12.5 5.5 8 10l4.5 4.5"/>', next: '<path d="M7.5 5.5 12 10l-4.5 4.5"/>' };
+  const group = el('div', { class: 'tool-nav-arrows' }, [
+    el('button', { type: 'button', class: 'tool-nav-arrow', 'data-nav': 'prev', 'aria-label': 'Show earlier tools', html: `<svg viewBox="0 0 20 20">${path.prev}</svg>` }),
+    el('button', { type: 'button', class: 'tool-nav-arrow', 'data-nav': 'next', 'aria-label': 'Show more tools', html: `<svg viewBox="0 0 20 20">${path.next}</svg>` }),
+  ]);
+  group.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-nav]');
+    if (button) scrollNav(scroller, button.dataset.nav === 'next' ? 1 : -1);
   });
-  window.addEventListener('hashchange', () => {
-    const id = parseHash();
-    if (id && id !== currentTabId) switchTab(id);
+  nav.append(group);
+}
+
+function updateNavEdges(scroller) {
+  const nav = scroller.closest('.tool-nav');
+  buildNavArrows(nav, scroller);
+  const prev = q('[data-nav="prev"]', nav);
+  const next = q('[data-nav="next"]', nav);
+  if (prev) prev.disabled = scroller.scrollLeft < 6;
+  if (next) next.disabled = scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 6;
+  const edge = q('.tool-nav-edge', scroller.parentElement);
+  const scrollable = scroller.scrollWidth - scroller.clientWidth > 4;
+  scroller.classList.toggle('is-scrollable', scrollable);
+  scroller.classList.toggle('is-scrolled', scrollable && scroller.scrollLeft > 6);
+  scroller.classList.toggle('is-at-end', scrollable && scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 6);
+  if (edge) edge.classList.toggle('is-hidden', scroller.classList.contains('is-at-end'));
+}
+
+function wireKeyboard(loaders) {
+  const nav = q('#toolNav .tool-tablist');
+  if (!nav) return;
+  nav.addEventListener('keydown', (event) => {
+    const list = tabs();
+    const index = list.indexOf(event.target.closest('.tool-tab'));
+    if (index === -1) return;
+    let next = null;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = list[(index + 1) % list.length];
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = list[(index - 1 + list.length) % list.length];
+    else if (event.key === 'Home') next = list[0];
+    else if (event.key === 'End') next = list[list.length - 1];
+    if (!next) return;
+    event.preventDefault();
+    const id = next.dataset.tool;
+    window.location.hash = `/${id}`;
+    activate(id, { focus: true });
+    mountTool(id, loaders);
   });
 }
 
-function wireResize() {
-  let raf = 0;
-  const handler = () => {
-    if (raf) cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(() => {
-      updateStripFades();
-      keepActiveTabVisible();
+/* Editor / preview switch for narrow screens — one panel at a time on phones. */
+function setupPanelSwitcher() {
+  const studio = q('#panel-markdown .studio');
+  if (!studio || q('.panel-switch', studio)) return;
+  const group = el('div', { class: 'panel-switch', role: 'group', 'aria-label': 'Choose which half of the studio to view' }, [
+    el('button', { type: 'button', class: 'panel-switch-button', 'data-mode': 'both', text: 'Both' }),
+    el('button', { type: 'button', class: 'panel-switch-button', 'data-mode': 'editor', text: 'Editor' }),
+    el('button', { type: 'button', class: 'panel-switch-button', 'data-mode': 'preview', text: 'Preview' }),
+  ]);
+  q('.studio-heading', studio)?.append(group);
+  const apply = (mode) => {
+    studio.dataset.panelMode = mode;
+    qa('.panel-switch-button', group).forEach((node) => {
+      const on = node.dataset.mode === mode;
+      node.classList.toggle('is-on', on);
+      node.setAttribute('aria-pressed', String(on));
     });
   };
-  window.addEventListener('resize', handler);
-  window.addEventListener('orientationchange', handler);
+  group.addEventListener('click', (event) => {
+    const node = event.target.closest('.panel-switch-button');
+    if (!node) return;
+    apply(node.dataset.mode);
+    panelPrefs.write({ panelMode: node.dataset.mode });
+  });
+  const narrow = window.matchMedia('(max-width: 900px)');
+  const sync = () => apply(narrow.matches ? (panelPrefs.read().panelMode ?? 'editor') : 'both');
+  sync();
+  narrow.addEventListener?.('change', sync);
 }
 
-/**
- * Centre the active tab card in the strip. Called after a tab switch,
- * after fonts load, and on resize. Aims for the centred position so
- * `scroll-snap-align: center` doesn't fight us.
- */
-export function keepActiveTabVisible() {
-  if (!initialScrollAligned) return; // wait for fonts/layout
-  const strip = $(`#${TAB_STRIP_ID}`);
-  if (!strip) return;
-  const active = strip.querySelector('.tool-nav-card.is-active');
-  if (!active) return;
-  const stripRect = strip.getBoundingClientRect();
-  const cardRect = active.getBoundingClientRect();
-  const offset = (cardRect.left + cardRect.right) / 2 - (stripRect.left + stripRect.right) / 2;
-  if (Math.abs(offset) < 1) return;
-  strip.scrollBy({ left: offset, behavior: 'smooth' });
+export function startShell({ loaders } = {}) {
+  const initial = activate(currentHashId());
+  tabs().forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const id = tab.dataset.tool;
+      window.location.hash = `/${id}`;
+      activate(id);
+      mountTool(id, loaders);
+    });
+  });
+  wireKeyboard(loaders);
+  setupPanelSwitcher();
+
+  /* The sheet is shared by every tab, so its controls sit outside them — one
+     strip under the tab bar, in step with whatever is on screen below. */
+  const strip = q('#pageStrip');
+  if (strip) {
+    strip.hidden = false;
+    mountControls(strip);
+    // the tab bar and the strip both stick, so the strip needs to know how tall
+    // the bar is or it would slide over it
+    const nav = q('#toolNav');
+    const paintOffset = () => document.documentElement.style.setProperty('--nav-h', `${nav?.offsetHeight ?? 86}px`);
+    paintOffset();
+    window.addEventListener('resize', paintOffset, { passive: true });
+    document.fonts?.ready.then(paintOffset);
+  }
+
+  const scroller = q('#toolNav .tool-nav-scroll');
+  if (scroller) {
+    updateNavEdges(scroller);
+    scroller.addEventListener('scroll', () => updateNavEdges(scroller), { passive: true });
+    window.addEventListener('resize', () => {
+      updateNavEdges(scroller);
+      keepActiveTabVisible(scroller, false);
+    }, { passive: true });
+    // the web font lands after first paint and re-measures every card
+    document.fonts?.ready.then(() => keepActiveTabVisible(scroller, false));
+  }
+
+  window.addEventListener('hashchange', () => {
+    const id = activate(currentHashId());
+    if (id !== 'markdown') mountTool(id, loaders);
+  });
+
+  /* Every tool carries its own Print button; all of them print the sheet the
+     page setup describes, whichever tab is standing. */
+  document.addEventListener('click', (event) => {
+    const print = event.target instanceof Element ? event.target.closest('[data-print-go]') : null;
+    if (print) {
+      event.preventDefault();
+      printSheet();
+      return;
+    }
+  });
+
+  document.addEventListener('click', (event) => {
+  const jump = event.target instanceof Element ? event.target.closest('a[href^="#"]') : null;
+  if (jump && jump.getAttribute('href') === '#how-it-works' && state.active !== 'markdown') {
+    event.preventDefault();
+    activate('markdown');
+    window.setTimeout(() => q('#how-it-works')?.scrollIntoView({ behavior: motionOk() ? 'smooth' : 'auto', block: 'start' }), 90);
+    return;
+  }
+    const link = event.target.closest?.('[data-tool-link]');
+    if (!link) return;
+    event.preventDefault();
+    const id = link.getAttribute('data-tool-link');
+    window.location.hash = `/${id}`;
+    activate(id);
+    mountTool(id, loaders);
+    q(`#panel-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  if (initial !== 'markdown') mountTool(initial, loaders);
+
+  const idle = window.requestIdleCallback ?? ((fn) => window.setTimeout(fn, 1400));
+  idle(() => {
+    const next = TOOL_IDS.find((id) => id !== state.active && typeof loaders?.[id] === 'function');
+    if (next) Promise.resolve(loaders[next]()).catch(() => {});
+  });
 }
-
-function parseHash() {
-  const hash = window.location.hash || '';
-  const match = hash.match(/^#([\w-]+)/);
-  return match ? match[1] : null;
-}
-
-

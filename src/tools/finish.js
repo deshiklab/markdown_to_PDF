@@ -1,1089 +1,998 @@
-// Finish tab. Four sub-panels, all running locally:
-//
-//   1. Metadata — read and rewrite the document fields (title, author,
-//      subject, keywords, creator, producer, dates).
-//   2. Footers — stamp `{page}` / `{total}` footers with placement,
-//      size, margin, and range.
-//   3. Redact — black out terms, optionally flatten the page to an
-//      image so the text really is gone.
-//   4. Checksum — SHA-2 / SHA-3 digest with a sidecar `.sum` file.
-//
-// Same shell as Converter: sub-tab strip inside the panel, settings
-// card on the left, file area on the right, busy action button at the
-// bottom. Every sub-panel is independent — pick a file in one, switch
-// to another, come back, the state is still there.
-
+/* Finish — the last touches a PDF needs before it goes out: document fields,
+   page numbers and footer stamps, blacking out what must not be read, and a
+   checksum to prove the file is the one you sent. pdf-lib does the writing and
+   pdf.js does the reading, both inside this tab. */
 import {
-  h, clear, showToast, readFileBytes, downloadBlob, sanitizeFilename,
-  formatBytes, lazy,
+  bytes,
+  debounce,
+  downloadBlob,
+  el,
+  emptyState,
+  escapeHtml,
+  hasFiles,
+  loadPdfJs,
+  loadPdfLib,
+  openPdfDocument,
+  parsePageRanges,
+  pickFiles,
+  q,
+  qa,
+  store,
+  toast,
 } from '../lib.js';
+import { printButton } from '../page.js';
 
-const loadPdfLib = lazy(() => import('pdf-lib'));
-const loadPdfJs = lazy(() => import('pdfjs-dist/build/pdf.mjs'));
-
-const SUBTABS = [
-  { id: 'metadata', title: 'Metadata', sub: 'Read and rewrite the document fields.' },
-  { id: 'footers', title: 'Page numbers & footers', sub: 'Stamp `{page}` / `{total}` at any edge.' },
-  { id: 'redact', title: 'Redact', sub: 'Black out terms, optionally flatten the page.' },
-  { id: 'checksum', title: 'Checksum', sub: 'SHA-2 / SHA-3 digest with a sidecar .sum file.' },
+const MODES = [
+  { id: 'meta', label: 'Document fields', note: 'Title, author, dates' },
+  { id: 'numbers', label: 'Page numbers', note: 'Footers and stamps' },
+  { id: 'redact', label: 'Black out', note: 'Cover or destroy terms' },
+  { id: 'hash', label: 'Checksum', note: 'Prove which file this is' },
 ];
 
+const POSITIONS = ['top-left', 'top-center', 'top-right', 'middle-left', 'centre', 'middle-right', 'bottom-left', 'bottom-center', 'bottom-right'];
+
+const FIELDS = [
+  { key: 'title', label: 'Title', get: 'getTitle', set: 'setTitle', placeholder: 'Shown in readers and search results' },
+  { key: 'author', label: 'Author', get: 'getAuthor', set: 'setAuthor', placeholder: 'Who wrote it' },
+  { key: 'subject', label: 'Subject', get: 'getSubject', set: 'setSubject', placeholder: 'What it is about' },
+  { key: 'keywords', label: 'Keywords', get: 'getKeywords', set: 'setKeywords', placeholder: 'comma, separated, list' },
+  { key: 'creator', label: 'Creator app', get: 'getCreator', set: 'setCreator', placeholder: 'The tool that made the text' },
+  { key: 'producer', label: 'Producer', get: 'getProducer', set: 'setProducer', placeholder: 'The library that wrote the file' },
+];
+
+const defaults = {
+  mode: 'meta',
+  stamp: 'Page {page} of {total}',
+  position: 'bottom-center',
+  stampSize: 9,
+  stampMargin: 28,
+  stampStart: 1,
+  stampRange: '',
+  stampFirst: true,
+  stampStyle: 'plain',
+  stampColour: '#3d4a40',
+  terms: '',
+  wholeWord: false,
+  ignoreCase: true,
+  redactColour: '#000000',
+  redactPad: 2,
+  redactRange: '',
+  flatten: false,
+  algo: 'SHA-256',
+};
+
+const prefs = store('finish:v1', defaults);
+
+const state = {
+  mode: prefs.read().mode,
+  form: { ...prefs.read() },
+  buffer: null,
+  name: '',
+  size: 0,
+  pageCount: 0,
+  version: '',
+  encrypted: false,
+  meta: null,
+  matches: [],
+  hash: '',
+  busy: false,
+};
+
+const downloadIcon = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5v8m0 0 3-3m-3 3-3-3M4.5 12.5v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3"/></svg>';
+
 export function start(root) {
-  const panel = h('div', { class: 'tool-finish' }, [
-    buildSubTabBar(),
-    h('div', { class: 'finish-stage', id: 'finishStage' }),
-  ]);
-
-  root.append(panel);
-
-  const subRoots = new Map();
-  let active = SUBTABS[0].id;
-
-  function renderActive() {
-    const stage = panel.querySelector('#finishStage');
-    clear(stage);
-    if (subRoots.has(active)) {
-      stage.append(subRoots.get(active));
-    } else {
-      const sub = buildSubTool(active);
-      subRoots.set(active, sub);
-      stage.append(sub);
-    }
-    panel.querySelectorAll('.finish-subtab').forEach((b) => {
-      const on = b.dataset.subtab === active;
-      b.classList.toggle('is-active', on);
-      b.setAttribute('aria-selected', on ? 'true' : 'false');
-    });
-  }
-
-  panel.querySelectorAll('.finish-subtab').forEach((button) => {
-    button.addEventListener('click', () => {
-      active = button.dataset.subtab;
-      renderActive();
-    });
-  });
-
-  renderActive();
-
-  return {
-    unmount() { panel.remove(); },
+  root.innerHTML = layout();
+  wire(root);
+  paintMode(root);
+  return () => {
+    if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
   };
 }
 
-function buildSubTabBar() {
-  return h('div', { class: 'finish-subtabs', role: 'tablist', 'aria-label': 'Finish sub-tools' },
-    SUBTABS.map((s) => h('button', {
-      type: 'button',
-      class: 'finish-subtab',
-      role: 'tab',
-      'data-subtab': s.id,
-      'aria-selected': 'false',
-    }, [
-      h('span', { class: 'finish-subtab-title' }, s.title),
-      h('span', { class: 'finish-subtab-sub' }, s.sub),
-    ]))
-  );
+/* ------------------------------------------------------------------ ui ---- */
+function layout() {
+  const form = state.form;
+  return `
+<div class="lab-shell fn-shell" id="fnShell" data-mode="${state.mode}">
+  <section class="panel fn-side" aria-labelledby="fn-side-title">
+    <div class="panel-header">
+      <div class="panel-title-group">
+        <span class="panel-index">01</span>
+        <div><h3 id="fn-side-title">One PDF</h3><p id="fnSideNote">Nothing open yet</p></div>
+      </div>
+      <div class="panel-header-actions"><button class="button button-light" type="button" id="fnClear"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.2 6.2l7.6 7.6m0-7.6-7.6 7.6"/></svg><span>Clear</span></button></div>
+    </div>
+
+    <div class="lab-drop" id="fnDrop" role="button" tabindex="0" aria-label="Choose a PDF to finish">
+      <span class="dropzone-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h5.2l3.3 3.3v9.7H6z"/><path d="M11 3.6v3.3h3.2M8.4 11h4M8.4 13.2h2.6"/></svg></span>
+      <strong>Drop a PDF</strong>
+      <span>or click to choose — read and rewritten in this tab</span>
+      <span class="dropzone-button">Choose file</span>
+    </div>
+
+    <div id="fnCard" class="fn-card"></div>
+    <div class="fn-preview" id="fnPreview" data-print-root hidden>
+      <canvas id="fnCanvas" aria-label="Top of page one with the current edits drawn on"></canvas>
+      <p class="fn-preview-note" id="fnPreviewNote">page 1 · live preview of this tab's edits</p>
+    </div>
+  </section>
+
+  <section class="panel fn-main" aria-labelledby="fn-main-title">
+    <div class="panel-header">
+      <div class="panel-title-group">
+        <span class="panel-index panel-index-green">02</span>
+        <div><h3 id="fn-main-title">Finish it</h3><p><span class="live-dot"></span> Nothing is uploaded — you download a new file</p></div>
+      </div>
+      <div class="panel-header-actions">${printButton()}<span class="lab-count" id="fnStat">no file</span></div>
+    </div>
+
+    <div class="lab-modes" role="group" aria-label="Finish mode">
+      ${MODES.map((mode) => `<button type="button" class="lab-mode${state.mode === mode.id ? ' is-on' : ''}" data-mode-btn="${mode.id}" aria-pressed="${state.mode === mode.id}"><strong>${mode.label}</strong><small>${mode.note}</small></button>`).join('')}
+    </div>
+
+    <div class="lab-body">
+      <div class="fn-stage" data-fn-panel="meta">
+        <p class="lab-help">These are the fields a reader or file manager shows you. Empty means “leave the file as it is”, and <strong>Clear everything</strong> wipes them so the PDF stops leaking the author’s word-count metadata.</p>
+        <div class="fn-meta-grid" id="fnMetaGrid">
+          ${FIELDS.map((field) => `<label class="field"><span class="field-label">${field.label}</span><input class="text-input" id="fnMeta-${field.key}" type="text" placeholder="${field.placeholder}" autocomplete="off" /></label>`).join('')}
+          <label class="field"><span class="field-label">Created</span><input class="text-input" id="fnMeta-created" type="datetime-local" step="1" /></label>
+          <label class="field"><span class="field-label">Modified</span><input class="text-input" id="fnMeta-modified" type="datetime-local" step="1" /></label>
+        </div>
+        <div class="lab-actions">
+          <p class="lab-hint" id="fnMetaHint">Open a PDF to read its current fields.</p>
+          <div class="lab-actions-row">
+            <button class="button button-light" type="button" id="fnMetaClear">Clear everything</button>
+            <button class="button button-export" type="button" id="fnMetaGo">${downloadIcon}<span>Save with new fields</span></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="fn-stage" data-fn-panel="numbers" hidden>
+        <p class="lab-help">Tokens: <code>{page}</code> <code>{total}</code> <code>{title}</code> <code>{date}</code> — text is drawn with a standard font, so it covers Latin script.</p>
+        <div class="lab-row">
+          <label class="field grow"><span class="field-label">Footer text</span>
+            <div class="fn-token-row"><input class="text-input" id="fnStampText" type="text" value="${escapeHtml(form.stamp)}" autocomplete="off" />
+              <div class="fn-chips" role="group" aria-label="Presets">
+                <button class="button button-text" type="button" data-stamp-preset="Page {page} of {total}">Page N of M</button>
+                <button class="button button-text" type="button" data-stamp-preset="{page}">Just the number</button>
+                <button class="button button-text" type="button" data-stamp-preset="Draft · {date}">Draft + date</button>
+              </div>
+            </div>
+          </label>
+        </div>
+        <div class="fn-numbers-grid">
+          <div class="field">
+            <span class="field-label">Placement</span>
+            <div class="lab-pos-grid" role="group" aria-label="Stamp position">
+              ${POSITIONS.map((position) => `<button type="button" class="lab-pos${form.position === position ? ' is-on' : ''}" data-position="${position}" title="${position.replace(/-/g, ' ')}" aria-label="${position.replace(/-/g, ' ')}" aria-pressed="${form.position === position}"><span></span></button>`).join('')}
+            </div>
+          </div>
+          <div class="fn-numbers-fields">
+            <label class="field"><span class="field-label">Size</span><input class="text-input" id="fnStampSize" type="number" min="5" max="60" step="0.5" value="${form.stampSize}" /></label>
+            <label class="field"><span class="field-label">Margin</span><input class="text-input" id="fnStampMargin" type="number" min="4" max="160" step="1" value="${form.stampMargin}" /></label>
+            <label class="field"><span class="field-label">Start numbering at</span><input class="text-input" id="fnStampStart" type="number" min="0" max="9999" step="1" value="${form.stampStart}" /></label>
+            <label class="field"><span class="field-label">Pages</span><input class="text-input" id="fnStampRange" type="text" placeholder="all, or 2-5,8" value="${escapeHtml(form.stampRange)}" autocomplete="off" /></label>
+            <label class="field field-switch"><input type="checkbox" class="switch-input" id="fnStampFirst" ${form.stampFirst ? 'checked' : ''} /><span class="switch-track" aria-hidden="true"></span><span class="field-label">Stamp the first page too</span></label>
+            <label class="field"><span class="field-label">Colour</span><span class="colour-wrap"><input class="colour-input" id="fnStampColour" type="color" value="${form.stampColour}" /><code id="fnStampColourOut">${form.stampColour}</code></span></label>
+          </div>
+        </div>
+        <div class="lab-actions">
+          <p class="lab-hint" id="fnStampHint">—</p>
+          <button class="button button-export" type="button" id="fnStampGo">${downloadIcon}<span>Add the stamps</span></button>
+        </div>
+      </div>
+
+      <div class="fn-stage" data-fn-panel="redact" hidden>
+        <p class="lab-help">One term per line (or comma separated). Folio finds every match in the text layer and paints over it. <strong>Flatten the page to an image</strong> also removes the underlying characters, so the text is really gone — that one is a true redaction.</p>
+        <label class="field"><span class="field-label">Terms to cover</span><textarea class="tr-paste" id="fnTerms" rows="3" placeholder="patient name&#10;ACME Corp&#10;01234 567 890" aria-label="Terms to black out">${escapeHtml(form.terms)}</textarea></label>
+        <div class="fn-redact-grid">
+          <label class="field"><span class="field-label">Pages</span><input class="text-input" id="fnRedactRange" type="text" placeholder="all, or 1-3,7" value="${escapeHtml(form.redactRange)}" autocomplete="off" /></label>
+          <label class="field"><span class="field-label">Ink</span><span class="colour-wrap"><input class="colour-input" id="fnRedactColour" type="color" value="${form.redactColour}" /><code id="fnRedactColourOut">${form.redactColour}</code></span></label>
+          <label class="field"><span class="field-label">Padding</span><input class="text-input" id="fnRedactPad" type="number" min="0" max="14" step="0.5" value="${form.redactPad}" /></label>
+          <label class="field field-switch"><input type="checkbox" class="switch-input" id="fnIgnoreCase" ${form.ignoreCase ? 'checked' : ''} /><span class="switch-track" aria-hidden="true"></span><span class="field-label">Ignore case</span></label>
+          <label class="field field-switch"><input type="checkbox" class="switch-input" id="fnWholeWord" ${form.wholeWord ? 'checked' : ''} /><span class="switch-track" aria-hidden="true"></span><span class="field-label">Whole words only</span></label>
+          <label class="field field-switch"><input type="checkbox" class="switch-input" id="fnFlatten" ${form.flatten ? 'checked' : ''} /><span class="switch-track" aria-hidden="true"></span><span class="field-label">Flatten page to image</span></label>
+        </div>
+        <div class="fn-findings" id="fnFindings" hidden></div>
+        <div class="lab-actions">
+          <p class="lab-hint" id="fnRedactHint">Type a term to see how many hits there are.</p>
+          <button class="button button-export" type="button" id="fnRedactGo">${downloadIcon}<span>Black out and save</span></button>
+        </div>
+      </div>
+
+      <div class="fn-stage" data-fn-panel="hash" hidden>
+        <p class="lab-help">A hash is a fingerprint of the exact bytes. Quote it when you send a file and anyone can confirm the copy they got is the same one — no upload, no third party.</p>
+        <div class="lab-modes fn-algo" role="group" aria-label="Hash algorithm">
+          ${['SHA-256', 'SHA-1', 'SHA-512'].map((algo) => `<button type="button" class="lab-mode${state.form.algo === algo ? ' is-on' : ''}" data-algo="${algo}" aria-pressed="${state.form.algo === algo}"><strong>${algo}</strong></button>`).join('')}
+        </div>
+        <label class="field"><span class="field-label" id="fnHashLabel">Digest</span>
+          <textarea class="tr-paste fn-hash-value" id="fnHashValue" rows="3" readonly aria-labelledby="fnHashLabel" placeholder="Open a PDF and the digest appears here"></textarea>
+        </label>
+        <div class="lab-actions-row fn-hash-actions">
+          <button class="button button-light" type="button" id="fnHashCopy">Copy digest</button>
+          <button class="button button-light" type="button" id="fnHashSave">${downloadIcon}<span>Save sidecar</span></button>
+        </div>
+        <label class="field"><span class="field-label">Compare with a digest you were given</span><input class="text-input" id="fnHashVerify" type="text" placeholder="paste 64 hex characters" autocomplete="off" spellcheck="false" /></label>
+        <p class="lab-hint" id="fnHashHint">No file open.</p>
+      </div>
+    </div>
+  </section>
+</div>`;
 }
 
-function buildSubTool(id) {
-  switch (id) {
-    case 'metadata': return buildMetadataPanel();
-    case 'footers': return buildFootersPanel();
-    case 'redact': return buildRedactPanel();
-    case 'checksum': return buildChecksumPanel();
-    default: throw new Error(`Unknown Finish sub-tool: ${id}`);
-  }
-}
+/* ---------------------------------------------------------------- wiring ---- */
+function wire(root) {
+  const save = debounce(() => prefs.write(state.form), 250);
+  const bind = (id, key, cast = (value) => value, after) => {
+    const node = q(`#${id}`, root);
+    if (!node) return;
+    const handler = () => {
+      state.form[key] = cast(node.type === 'checkbox' ? node.checked : node.value);
+      save();
+      after?.();
+    };
+    node.addEventListener('input', handler);
+    node.addEventListener('change', handler);
+  };
 
-// ---------------------------------------------------------------------------
-// Common chrome for the four panels: a file picker + drop area, a
-// status line, and a busy action button.
-// ---------------------------------------------------------------------------
+  bind('fnStampText', 'stamp', undefined, () => paintStampHint(root));
+  bind('fnStampSize', 'stampSize', Number, () => repaintPreview(root));
+  bind('fnStampMargin', 'stampMargin', Number, () => paintStampHint(root));
+  bind('fnStampStart', 'stampStart', Number, () => paintStampHint(root));
+  bind('fnStampRange', 'stampRange');
+  bind('fnStampFirst', 'stampFirst', undefined, () => paintStampHint(root));
+  bind('fnStampColour', 'stampColour', undefined, () => {
+    q('#fnStampColourOut', root).textContent = state.form.stampColour;
+    repaintPreview(root);
+  });
+  bind('fnTerms', 'terms', undefined, () => {
+    findMatches(root);
+  });
+  bind('fnRedactRange', 'redactRange', undefined, () => findMatches(root));
+  bind('fnRedactColour', 'redactColour', undefined, () => {
+    q('#fnRedactColourOut', root).textContent = state.form.redactColour;
+    repaintPreview(root);
+  });
+  bind('fnRedactPad', 'redactPad', Number, () => repaintPreview(root));
+  bind('fnIgnoreCase', 'ignoreCase', undefined, () => findMatches(root));
+  bind('fnWholeWord', 'wholeWord', undefined, () => findMatches(root));
+  bind('fnFlatten', 'flatten');
 
-function buildFileArea({ statusText, multiple = false, accept = 'application/pdf,.pdf' }) {
-  return h('section', { class: 'finish-files' }, [
-    h('div', { class: 'finish-drop', 'data-drop': 'true' }, [
-      dropIcon(),
-      h('strong', null, 'Drop a PDF here'),
-      h('span', null, 'or use the file picker below'),
-      h('button', { class: 'button button-light', type: 'button', 'data-pick': 'true' }, 'Choose PDF'),
-    ]),
-    h('div', { class: 'finish-file-list', 'data-files': 'true' }),
-    h('div', { class: 'finish-foot' }, [
-      h('span', { class: 'finish-status', 'data-status': 'true' }, statusText),
-      h('button', { class: 'button button-export', type: 'button', 'data-action': 'true' }, [
-        actionIcon(),
-        h('span', null, 'Run'),
-      ]),
-    ]),
-  ]);
-}
-
-/**
- * Wire a panel's file area. The `state` object is updated in place
- * with `state.file` (single) or `state.files` (multiple). Returns a
- * refresh() function the panel can call to redraw the file list.
- */
-function wireFileArea(panel, state, { accept, multiple, onChange }) {
-  const drop = panel.querySelector('[data-drop]');
-  const list = panel.querySelector('[data-files]');
-  const pick = panel.querySelector('[data-pick]');
-  const status = panel.querySelector('[data-status]');
-
-  function render() {
-    clear(list);
-    const files = state.files || (state.file ? [state.file] : []);
-    if (!files.length) return;
-    files.forEach((file, index) => {
-      const row = h('div', { class: 'finish-file-row' }, [
-        h('span', { class: 'finish-file-name' }, file.name),
-        h('span', { class: 'finish-file-size' }, formatBytes(file.size)),
-        h('button', {
-          type: 'button',
-          class: 'finish-file-remove',
-          'aria-label': `Remove ${file.name}`,
-          title: 'Remove',
-        }, '×'),
-      ]);
-      row.querySelector('button').addEventListener('click', () => {
-        if (multiple) state.files.splice(index, 1);
-        else state.file = null;
-        render();
-        if (onChange) onChange();
+  qa('[data-mode-btn]', root).forEach((node) => {
+    node.addEventListener('click', () => {
+      state.mode = node.dataset.modeBtn;
+      state.form.mode = state.mode;
+      save();
+      paintMode(root);
+    });
+  });
+  qa('[data-stamp-preset]', root).forEach((node) => {
+    node.addEventListener('click', () => {
+      state.form.stamp = node.dataset.stampPreset;
+      q('#fnStampText', root).value = state.form.stamp;
+      save();
+      paintStampHint(root);
+    });
+  });
+  qa('.lab-pos', root).forEach((node) => {
+    node.addEventListener('click', () => {
+      state.form.position = node.dataset.position;
+      save();
+      qa('.lab-pos', root).forEach((other) => {
+        const on = other === node;
+        other.classList.toggle('is-on', on);
+        other.setAttribute('aria-pressed', String(on));
       });
-      list.append(row);
+      paintStampHint(root);
     });
-  }
-
-  function addFiles(fileList) {
-    const arr = Array.from(fileList || []);
-    if (multiple) {
-      state.files = (state.files || []).concat(arr);
-    } else {
-      state.file = arr[0] || null;
-    }
-    render();
-    if (onChange) onChange();
-  }
-
-  pick.addEventListener('click', async () => {
-    const { pickFile } = await import('../lib.js');
-    const files = await pickFile({ accept, multiple });
-    if (files && files.length) addFiles(files);
+  });
+  qa('[data-algo]', root).forEach((node) => {
+    node.addEventListener('click', () => {
+      state.form.algo = node.dataset.algo;
+      save();
+      qa('[data-algo]', root).forEach((other) => {
+        const on = other === node;
+        other.classList.toggle('is-on', on);
+        other.setAttribute('aria-pressed', String(on));
+      });
+      computeHash(root);
+    });
   });
 
-  ['dragenter', 'dragover'].forEach((evt) => drop.addEventListener(evt, (e) => {
-    e.preventDefault();
-    drop.classList.add('is-drag');
-  }));
-  ['dragleave', 'drop'].forEach((evt) => drop.addEventListener(evt, (e) => {
-    if (evt === 'dragleave' && e.target !== drop) return;
-    drop.classList.remove('is-drag');
-  }));
-  drop.addEventListener('drop', (e) => {
-    e.preventDefault();
-    if (e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files);
+  const zone = q('#fnDrop', root);
+  zone.addEventListener('click', async () => {
+    const [file] = await pickFiles({ accept: 'application/pdf', multiple: false });
+    if (file) loadFile(file, root);
+  });
+  zone.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      zone.click();
+    }
+  });
+  zone.addEventListener('dragover', (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    zone.classList.add('is-dragging');
+  });
+  zone.addEventListener('dragleave', () => zone.classList.remove('is-dragging'));
+  zone.addEventListener('drop', (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    zone.classList.remove('is-dragging');
+    const [file] = Array.from(event.dataTransfer?.files || []);
+    if (file) loadFile(file, root);
+    else toast('Drop a PDF file.', true);
   });
 
-  return { render, setStatus: (text) => { status.textContent = text; }, status };
-}
+  q('#fnClear', root)?.addEventListener('click', () => {
+    state.buffer = null;
+    state.name = '';
+    state.matches = [];
+    state.hash = '';
+    root.classList.remove('has-input');
+    paintCard(root);
+    paintMode(root);
+    const hash = q('#fnHashValue', root);
+    if (hash) hash.value = '';
+    toast('Panel cleared. Your file was never anywhere but here.');
+  });
 
-function setBusy(button, busy, label) {
-  if (!button) return;
-  button.disabled = !!busy;
-  if (busy) {
-    button.innerHTML = '<span class="export-spinner" aria-hidden="true"></span><span>' + label + '</span>';
-  } else {
-    button.innerHTML = '';
-    button.append(actionIcon());
-    const span = document.createElement('span');
-    span.textContent = label;
-    button.append(span);
-  }
-}
-
-function dropIcon() {
-  return h('svg', { viewBox: '0 0 32 32', fill: 'none', 'aria-hidden': 'true' },
-    h('path', { d: 'M16 20.5V5.75m0 0-5.5 5.5M16 5.75l5.5 5.5 M7 19v5.25A2.75 2.75 0 0 0 9.75 27h12.5A2.75 2.75 0 0 0 25 24.25V19', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' })
-  );
-}
-
-function actionIcon() {
-  return h('svg', { viewBox: '0 0 20 20', 'aria-hidden': 'true', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
-    h('path', { d: 'M10 3.5v8m0 0 3-3m-3 3-3-3M4.5 12.5v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3' })
-  );
-}
-
-// ---------------------------------------------------------------------------
-// 1. Metadata
-// ---------------------------------------------------------------------------
-
-// PDF date format is `D:YYYYMMDDHHmmSSOHH'mm'` (a literal D:, then
-// year, month, day, hour, minute, second, and an optional timezone).
-// The output field of a `pdf-lib` PDFDocument is a JS Date if you
-// pass one, so we round-trip Date ↔ PDF string here.
-const PDF_DATE_FIELDS = ['CreationDate', 'ModDate'];
-
-function pdfDateToDate(str) {
-  if (!str || typeof str !== 'string' || !str.startsWith('D:')) return null;
-  const body = str.slice(2);
-  const y = parseInt(body.slice(0, 4), 10);
-  const mo = parseInt(body.slice(4, 6), 10) - 1;
-  const d = parseInt(body.slice(6, 8), 10);
-  const h = parseInt(body.slice(8, 10), 10) || 0;
-  const mi = parseInt(body.slice(10, 12), 10) || 0;
-  const s = parseInt(body.slice(12, 14), 10) || 0;
-  if (!Number.isFinite(y)) return null;
-  return new Date(y, mo, d, h, mi, s);
-}
-
-function dateToPdfDate(date) {
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return undefined;
-  const pad = (n, w = 2) => String(n).padStart(w, '0');
-  return `D:${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
-}
-
-function buildMetadataPanel() {
-  const root = h('div', { class: 'finish-sub' });
-
-  const form = h('form', { class: 'finish-metadata', autocomplete: 'off' }, [
-    metaRow('Title', 'title', 'Document title'),
-    metaRow('Author', 'author', 'Who wrote it'),
-    metaRow('Subject', 'subject', 'A short description'),
-    metaRow('Keywords', 'keywords', 'comma, separated, tags'),
-    metaRow('Creator', 'creator', 'Originating application'),
-    metaRow('Producer', 'producer', 'PDF producer'),
-    metaRow('Created', 'created', '', { type: 'datetime-local' }),
-    metaRow('Modified', 'modified', '', { type: 'datetime-local' }),
-  ]);
-
-  const fileArea = buildFileArea({ statusText: 'No PDF yet.' });
-  root.append(
-    h('div', { class: 'finish-sub-head' }, [
-      h('h3', null, 'Metadata'),
-      h('p', null, 'Read the document fields from a PDF, edit them, and save the result. The text layer of the source pages is preserved.'),
-    ]),
-    h('div', { class: 'finish-sub-body finish-sub-body-wide' }, [
-      h('aside', { class: 'finish-settings' }, [
-        h('h4', { class: 'finish-settings-title' }, 'Document fields'),
-        form,
-      ]),
-      fileArea,
-    ]),
-  );
-
-  const state = { file: null, fields: defaults() };
-  const wire = wireFileArea(root, state, { accept: 'application/pdf,.pdf', multiple: false, onChange: loadCurrent });
-
-  async function loadCurrent() {
-    if (!state.file) {
-      Object.assign(state.fields, defaults());
-      fillForm(form, state.fields);
-      wire.setStatus('No PDF yet.');
-      return;
-    }
-    wire.setStatus(`Reading ${state.file.name}…`);
+  q('#fnMetaGo', root)?.addEventListener('click', () => saveMeta(root));
+  q('#fnMetaClear', root)?.addEventListener('click', () => clearMetaFields(root));
+  q('#fnStampGo', root)?.addEventListener('click', () => addStamps(root));
+  q('#fnRedactGo', root)?.addEventListener('click', () => blackOut(root));
+  q('#fnHashCopy', root)?.addEventListener('click', async () => {
+    if (!state.hash) return toast('Open a PDF first.', true);
     try {
-      const { PDFDocument } = await loadPdfLib();
-      const bytes = await readFileBytes(state.file);
-      const doc = await PDFDocument.load(bytes, { updateMetadata: false });
-      Object.assign(state.fields, readFields(doc));
-      fillForm(form, state.fields);
-      wire.setStatus(`Loaded ${state.file.name}. Edit any field and click Save.`);
+      await navigator.clipboard.writeText(`${state.hash}  ${state.name}`);
+      toast('Digest and filename copied.');
     } catch (error) {
-      console.error('Metadata read failed:', error);
-      wire.setStatus('Could not read this PDF.');
-      showToast('Could not read the PDF metadata.', { error: true });
+      toast('Your browser blocked the clipboard — select the text instead.', true);
     }
-  }
-
-  // Live-sync form changes into state.
-  form.addEventListener('input', () => {
-    const fd = new FormData(form);
-    state.fields.title = fd.get('title') || '';
-    state.fields.author = fd.get('author') || '';
-    state.fields.subject = fd.get('subject') || '';
-    state.fields.keywords = fd.get('keywords') || '';
-    state.fields.creator = fd.get('creator') || '';
-    state.fields.producer = fd.get('producer') || '';
-    state.fields.created = fd.get('created') || '';
-    state.fields.modified = fd.get('modified') || '';
   });
+  q('#fnHashSave', root)?.addEventListener('click', () => {
+    if (!state.hash) return toast('Open a PDF first.', true);
+    const ext = state.form.algo.toLowerCase().replace('sha-', 'sha');
+    downloadBlob(new Blob([`${state.hash}  ${state.name}\n`], { type: 'text/plain' }), `${fileNameWithoutExtension(state.name)}.${ext}sum`);
+  });
+  q('#fnHashVerify', root)?.addEventListener('input', (event) => compareHash(event.target.value, root));
 
-  root.querySelector('[data-action]').addEventListener('click', () => metadataSave(root, state, wire));
-  // Update the action button label to "Save" since this panel writes
-  // the file out, unlike the others which print / stamp / hash.
-  const actionBtn = root.querySelector('[data-action]');
-  actionBtn.querySelector('span').textContent = 'Save PDF';
-  return root;
+  paintMode(root);
+  paintStampHint(root);
 }
 
-function defaults() {
-  return {
-    title: '',
-    author: '',
-    subject: '',
-    keywords: '',
-    creator: '',
-    producer: '',
-    created: '',
-    modified: '',
-  };
+/* ----------------------------------------------------------- file intake ---- */
+async function loadFile(file, root) {
+  if (!/pdf$/i.test(file.type) && !/\.pdf$/i.test(file.name)) {
+    toast('That was not a PDF.', true);
+    return;
+  }
+  state.name = file.name;
+  state.size = file.size;
+  state.buffer = await file.arrayBuffer();
+  state.hash = '';
+  state.matches = [];
+  root.classList.add('has-input');
+  await readMeta(root);
+  paintCard(root);
+  await computeHash(root);
+  paintStampHint(root);
+  findMatches(root);
+  renderPreview(root);
 }
 
-function readFields(doc) {
-  const out = defaults();
-  // pdf-lib exposes the Info dictionary via getInfoDict(); getTitle,
-  // getAuthor, etc. are convenience wrappers around it.
-  out.title = doc.getTitle() || '';
-  out.author = doc.getAuthor() || '';
-  out.subject = doc.getSubject() || '';
-  out.keywords = (doc.getKeywords() || '').split(/[;,]/).map((s) => s.trim()).filter(Boolean).join(', ');
-  out.creator = doc.getCreator() || '';
-  out.producer = doc.getProducer() || '';
-  // Created / modified aren't direct getters on pdf-lib's high-level
-  // API, so reach into the Info dict.
-  const info = doc.getInfoDict ? doc.getInfoDict() : null;
-  if (info) {
-    const created = pdfDateToDate(info.get ? info.get('CreationDate') : null);
-    const modified = pdfDateToDate(info.get ? info.get('ModDate') : null);
-    if (created) out.created = toLocalInput(created);
-    if (modified) out.modified = toLocalInput(modified);
-  }
-  return out;
+function fileNameWithoutExtension(name) {
+  return String(name || 'document').replace(/\.pdf$/i, '');
 }
 
-function writeFields(doc, fields) {
-  doc.setTitle(fields.title || undefined);
-  doc.setAuthor(fields.author || undefined);
-  doc.setSubject(fields.subject || undefined);
-  if (fields.keywords && fields.keywords.trim()) {
-    doc.setKeywords(fields.keywords.split(/[;,]/).map((s) => s.trim()).filter(Boolean));
-  } else {
-    doc.setKeywords([]);
+async function readMeta(root) {
+  const { PDFDocument } = await loadPdfLib();
+  const doc = await PDFDocument.load(state.buffer.slice(0), { ignoreEncryption: true, updateMetadata: false });
+  state.pageCount = doc.getPageCount();
+  state.encrypted = Boolean(doc.isEncrypted);
+  const head = new TextDecoder('latin1').decode(new Uint8Array(state.buffer.slice(0, 16)));
+  state.version = (/^%PDF-(\d+\.\d+)/.exec(head) || [])[1] ?? '';
+  const meta = {};
+  for (const field of FIELDS) {
+    meta[field.key] = doc[field.get]() ?? '';
   }
-  doc.setCreator(fields.creator || undefined);
-  doc.setProducer(fields.producer || undefined);
-  const info = doc.getInfoDict ? doc.getInfoDict() : null;
-  if (info && info.set) {
-    if (fields.created) {
-      const d = new Date(fields.created);
-      if (!Number.isNaN(d.getTime())) info.set('CreationDate', dateToPdfDate(d));
-    }
-    if (fields.modified) {
-      const d = new Date(fields.modified);
-      if (!Number.isNaN(d.getTime())) info.set('ModDate', dateToPdfDate(d));
-    }
+  const created = doc.getCreationDate();
+  const modified = doc.getModificationDate();
+  meta.created = toLocalInput(created);
+  meta.modified = toLocalInput(modified);
+  state.meta = meta;
+  for (const field of FIELDS) {
+    const node = q(`#fnMeta-${field.key}`, root);
+    if (node) node.value = meta[field.key];
   }
-  // pdf-lib updates ModDate automatically on save(), but we want the
-  // user's value if they set one explicitly, so override after the
-  // helper runs. (The set above runs first; save() runs in the caller.)
+  const createdNode = q('#fnMeta-created', root);
+  const modifiedNode = q('#fnMeta-modified', root);
+  if (createdNode) createdNode.value = meta.created;
+  if (modifiedNode) modifiedNode.value = meta.modified;
+  const hint = q('#fnMetaHint', root);
+  const sizeText = state.pageCount ? ` · page size ${fmtSize(doc.getPage(0).getSize())}` : ' · this file reports no pages';
+  const filled = FIELDS.filter((field) => meta[field.key]).length;
+  if (hint) hint.textContent = filled ? `${filled} of ${FIELDS.length} fields are set${sizeText}` : `No document fields are set in this file${sizeText}.`;
+  const stat = q('#fnStat', root);
+  if (stat) stat.textContent = `${state.pageCount} pages · PDF ${state.version || '?'}`;
 }
 
-function fillForm(form, fields) {
-  for (const [key, value] of Object.entries(fields)) {
-    const input = form.querySelector(`[name="${key}"]`);
-    if (input) input.value = value || '';
-  }
+function fmtSize({ width, height }) {
+  return `${Math.round(width)}×${Math.round(height)} pt`;
 }
 
 function toLocalInput(date) {
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-function metaRow(label, name, placeholder, { type = 'text' } = {}) {
-  return h('label', { class: 'finish-row' }, [
-    h('span', { class: 'finish-row-label' }, label),
-    h('input', { class: 'finish-row-input', type, name, placeholder, autocomplete: 'off', spellcheck: type === 'text' ? 'false' : 'false' }),
-  ]);
-}
-
-async function metadataSave(root, state, wire) {
-  if (!state.file) {
-    showToast('Choose a PDF first.', { error: true });
+function paintCard(root) {
+  const card = q('#fnCard', root);
+  const note = q('#fnSideNote', root);
+  if (!card) return;
+  if (!state.buffer) {
+    card.replaceChildren(emptyState({ title: 'No file open', note: 'Pick a PDF and its fields, pages and digest appear here.' }));
+    if (note) note.textContent = 'Nothing open yet';
+    const preview = q('#fnPreview', root);
+    if (preview) preview.hidden = true;
     return;
   }
-  const button = root.querySelector('[data-action]');
-  setBusy(button, true, 'Saving…');
-  wire.setStatus('Rewriting metadata…');
-  try {
-    const { PDFDocument } = await loadPdfLib();
-    const bytes = await readFileBytes(state.file);
-    const doc = await PDFDocument.load(bytes, { updateMetadata: false });
-    writeFields(doc, state.fields);
-    const out = await doc.save();
-    const baseName = state.file.name.replace(/\.pdf$/i, '') || 'document';
-    downloadBlob(new Blob([out], { type: 'application/pdf' }), `${baseName}-metadata.pdf`);
-    wire.setStatus(`Saved ${baseName}-metadata.pdf (${formatBytes(out.length)}).`);
-    showToast(`Saved ${baseName}-metadata.pdf`);
-  } catch (error) {
-    console.error('Metadata save failed:', error);
-    wire.setStatus(error && error.message ? error.message : 'Could not save the PDF.');
-    showToast('Could not save the PDF.', { error: true });
-  } finally {
-    setBusy(button, false, 'Save PDF');
+  const chips = [
+    `${state.pageCount} ${state.pageCount === 1 ? 'page' : 'pages'}`,
+    bytes(state.size),
+    state.version ? `PDF ${state.version}` : '',
+    state.encrypted ? 'encrypted' : '',
+  ].filter(Boolean);
+  card.replaceChildren(
+    el('div', { class: 'fn-card-row' }, [
+      el('div', { class: 'fn-card-name', text: state.name, title: state.name }),
+      el('a', { class: 'button button-light', href: '#', text: 'Replace', onclick: (event) => { event.preventDefault(); q('#fnDrop', root)?.click(); } }),
+    ]),
+    el('div', { class: 'fn-chip-row' }, chips.map((chip) => el('span', { class: 'fn-chip', text: chip }))),
+  );
+  if (note) note.textContent = 'Fields, footers and redactions read from this file';
+}
+
+/* ------------------------------------------------------------ mode swap ---- */
+function paintMode(root) {
+  const shell = q('#fnShell', root);
+  shell.dataset.mode = state.mode;
+  qa('[data-mode-btn]', root).forEach((node) => {
+    const on = node.dataset.modeBtn === state.mode;
+    node.classList.toggle('is-on', on);
+    node.setAttribute('aria-pressed', String(on));
+  });
+  qa('[data-fn-panel]', root).forEach((panel) => {
+    panel.hidden = panel.dataset.fnPanel !== state.mode;
+  });
+  const preview = q('#fnPreview', root);
+  if (preview) preview.hidden = state.mode === 'meta' || state.mode === 'hash' || !state.buffer;
+  if (state.buffer) {
+    paintCard(root);
+    renderPreview(root);
   }
 }
 
-// ---------------------------------------------------------------------------
-// 2. Page numbers / footers
-// ---------------------------------------------------------------------------
+/* ------------------------------------------------------------- metadata ---- */
+function clearMetaFields(root) {
+  for (const field of FIELDS) {
+    const node = q(`#fnMeta-${field.key}`, root);
+    if (node) node.value = '';
+  }
+  toast('Fields emptied — press Save with new fields to write it.');
+}
 
-function buildFootersPanel() {
-  const root = h('div', { class: 'finish-sub' });
-  const fileArea = buildFileArea({ statusText: 'No PDF yet.' });
-
-  const settings = [
-    selectRow('Placement', 'placement', [
-      ['bottom-center', 'Bottom · center'],
-      ['bottom-right', 'Bottom · right'],
-      ['bottom-left', 'Bottom · left'],
-      ['top-center', 'Top · center'],
-      ['top-right', 'Top · right'],
-      ['top-left', 'Top · left'],
-    ]),
-    textRow('Text template', 'template', 'Page {page} of {total}', 'Use {page} and {total}'),
-    rangeRow('Font size', 'fontSize', 7, 18, 9, 'pt'),
-    colorRow('Colour', 'color', '#444444'),
-    rangeRow('Margin', 'margin', 8, 60, 22, 'mm'),
-    selectRow('Pages', 'pages', [['all', 'All pages'], ['range', 'A range…'], ['first', 'Skip first (cover)'], ['except-last', 'Skip last']]),
-    textRow('Range', 'range', '1', 'e.g. 2-9'),
-    h('label', { class: 'finish-row finish-row-check' }, [
-      h('input', { type: 'checkbox', 'data-setting': 'excludeFirst', checked: true }),
-      h('span', null, 'Skip page 1 (typical for cover pages)'),
-    ]),
-  ];
-
-  root.append(
-    h('div', { class: 'finish-sub-head' }, [
-      h('h3', null, 'Page numbers & footers'),
-      h('p', null, 'Stamp a `{page}` / `{total}` footer at any edge of every page. The text layer of the source pages is preserved; the stamp is drawn into the page content stream.'),
-    ]),
-    h('div', { class: 'finish-sub-body' }, [
-      h('aside', { class: 'finish-settings' }, [
-        h('h4', { class: 'finish-settings-title' }, 'Footer'),
-        ...settings,
-      ]),
-      fileArea,
-    ]),
-  );
-
-  const state = {
-    file: null,
-    placement: 'bottom-center',
-    template: 'Page {page} of {total}',
-    fontSize: 9,
-    color: '#444444',
-    margin: 22,
-    pages: 'all',
-    range: '',
-    excludeFirst: true,
-  };
-  const wire = wireFileArea(root, state, { accept: 'application/pdf,.pdf', multiple: false });
-  wireSettings(root, state, {
-    placement: 'placement',
-    template: 'template',
-    fontSize: 'fontSize',
-    color: 'color',
-    margin: 'margin',
-    pages: 'pages',
-    range: 'range',
-    excludeFirst: 'excludeFirst',
+async function saveMeta(root) {
+  if (!state.buffer) return toast('Open a PDF first.', true);
+  await withBusy(root, '#fnMetaGo', 'Writing…', async () => {
+    const { PDFDocument } = await loadPdfLib();
+    const doc = await PDFDocument.load(state.buffer.slice(0), { ignoreEncryption: true, updateMetadata: false });
+    for (const field of FIELDS) {
+      const value = String(q(`#fnMeta-${field.key}`, root)?.value ?? '').trim();
+      if (field.key === 'keywords') doc.setKeywords(value ? value.split(/[,\n]/).map((word) => word.trim()).filter(Boolean) : []);
+      else doc[field.set](value);
+    }
+    for (const key of ['created', 'modified']) {
+      const raw = String(q(`#fnMeta-${key}`, root)?.value ?? '');
+      if (!raw) continue;
+      const date = new Date(raw);
+      if (!Number.isNaN(date.getTime())) {
+        if (key === 'created') doc.setCreationDate(date);
+        else doc.setModificationDate(date);
+      }
+    }
+    const out = await doc.save({ useObjectStreams: false });
+    downloadBlob(new Blob([out], { type: 'application/pdf' }), `${fileNameWithoutExtension(state.name)}-fields.pdf`);
+    state.buffer = out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
+    state.size = out.byteLength;
+    await readMeta(root);
+    await computeHash(root);
+    toast('Document fields written. Check the fields again to see them.');
   });
+}
 
-  // Hide the range input unless the user picked "A range…".
-  const rangeRowEl = root.querySelector('[data-setting="range"]')?.closest('label');
-  const syncRange = () => {
-    if (!rangeRowEl) return;
-    const off = state.pages !== 'range';
-    rangeRowEl.style.opacity = off ? '0.45' : '1';
-    rangeRowEl.style.pointerEvents = off ? 'none' : 'auto';
-  };
-  syncRange();
-  root.querySelector('[data-setting="pages"]').addEventListener('change', syncRange);
+/* --------------------------------------------------------- page numbers ---- */
+function stampLines(pageIndex) {
+  const total = state.pageCount || 1;
+  const number = pageIndex + Number(state.form.stampStart || 0);
+  const title = (state.meta?.title || fileNameWithoutExtension(state.name) || '').trim();
+  const date = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  return String(state.form.stamp || '{page}')
+    .replace(/\{page\}/gi, String(number))
+    .replace(/\{total\}/gi, String(total))
+    .replace(/\{title\}/gi, title)
+    .replace(/\{date\}/gi, date);
+}
 
-  const actionBtn = root.querySelector('[data-action]');
-  actionBtn.querySelector('span').textContent = 'Stamp footer';
-  actionBtn.addEventListener('click', () => footersStamp(root, state, wire));
-  return root;
+function paintStampHint(root) {
+  const hint = q('#fnStampHint', root);
+  if (!hint) return;
+  if (!state.buffer) {
+    hint.textContent = 'Open a PDF to place the stamp on real page sizes.';
+    return;
+  }
+  const sample = stampLines(state.form.stampFirst ? 0 : 1);
+  hint.innerHTML = `Page 1 would read <strong>${escapeHtml(sample || '(empty)')}</strong> · ${escapeHtml(state.form.position)} · ${state.form.stampSize}pt · ${state.form.stampMargin}pt in`;
+}
+
+async function addStamps(root) {
+  if (!state.buffer) return toast('Open a PDF first.', true);
+  const range = parsePageRanges(state.form.stampRange, state.pageCount);
+  if (!range.ok) {
+    toast('Pages need to look like 2-5,8 or "all".', true);
+    return;
+  }
+  await withBusy(root, '#fnStampGo', 'Stamping…', async () => {
+    const { PDFDocument, StandardFonts, rgb, degrees } = await loadPdfLib();
+    const doc = await PDFDocument.load(state.buffer.slice(0), { ignoreEncryption: true, updateMetadata: false });
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const widthOf = (text) => font.widthOfTextAtSize(text, Number(state.form.stampSize) || 9);
+    const include = new Set();
+    range.ranges.forEach(({ start, end }) => {
+      for (let page = start; page <= end; page += 1) include.add(page - 1);
+    });
+    if (!state.form.stampFirst) include.delete(0);
+    let done = 0;
+    const colour = hexToRgb(state.form.stampColour);
+    doc.getPages().forEach((page, index) => {
+      if (!include.has(index)) return;
+      const text = stampLines(index);
+      if (!text) return;
+      const { width, height } = page.getSize();
+      const rot = ((page.getRotation().angle % 360) + 360) % 360;
+      const landscape = rot === 90 || rot === 270;
+      const size = Number(state.form.stampSize) || 9;
+      const margin = Number(state.form.stampMargin) || 0;
+      const textWidth = widthOf(text);
+      const W = landscape ? height : width;
+      const H = landscape ? width : height;
+      const dx = state.form.position.includes('right') ? W - margin - textWidth : state.form.position.includes('left') ? margin : (W - textWidth) / 2;
+      const dyUp = state.form.position.includes('top') ? H - margin - size : state.form.position.includes('middle') ? (H - size) / 2 : margin;
+      let x = dx;
+      let y = dyUp;
+      let angle = 0;
+      if (rot === 90) {
+        x = width - dyUp;
+        y = dx;
+        angle = 90;
+      } else if (rot === 180) {
+        x = width - dx;
+        y = height - dyUp;
+        angle = 180;
+      } else if (rot === 270) {
+        x = dyUp;
+        y = height - dx;
+        angle = 270;
+      }
+      page.drawText(text, { x, y, size, font, color: rgb(...colour), rotate: degrees(angle) });
+      done += 1;
+    });
+    const out = await doc.save({ useObjectStreams: false });
+    downloadBlob(new Blob([out], { type: 'application/pdf' }), `${fileNameWithoutExtension(state.name)}-numbered.pdf`);
+    toast(`${done} ${done === 1 ? 'page' : 'pages'} stamped — the file is in your downloads.`);
+  });
 }
 
 function hexToRgb(hex) {
-  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '');
-  if (!m) return { r: 0.27, g: 0.27, b: 0.27 };
-  return {
-    r: parseInt(m[1], 16) / 255,
-    g: parseInt(m[2], 16) / 255,
-    b: parseInt(m[3], 16) / 255,
-  };
+  const clean = String(hex || '#000').replace('#', '');
+  const full = clean.length === 3 ? clean.split('').map((c) => c + c).join('') : clean.padEnd(6, '0').slice(0, 6);
+  return [0, 2, 4].map((i) => Number.parseInt(full.slice(i, i + 2), 16) / 255);
 }
 
-async function footersStamp(root, state, wire) {
-  if (!state.file) {
-    showToast('Choose a PDF first.', { error: true });
-    return;
-  }
-  const button = root.querySelector('[data-action]');
-  setBusy(button, true, 'Stamping…');
-  wire.setStatus('Reading PDF…');
-  try {
-    const { PDFDocument, StandardFonts, rgb } = await loadPdfLib();
-    const bytes = await readFileBytes(state.file);
-    const doc = await PDFDocument.load(bytes, { updateMetadata: false });
-    const font = await doc.embedFont(StandardFonts.Helvetica);
-    const total = doc.getPageCount();
-
-    // Resolve the target page set.
-    let pages;
-    if (state.pages === 'range') {
-      pages = parseRange(state.range, total);
-      if (!pages.length) throw new Error('The page range did not match any page.');
-    } else if (state.pages === 'first') {
-      pages = [1];
-    } else if (state.pages === 'except-last') {
-      pages = Array.from({ length: total - 1 }, (_, i) => i + 1);
-    } else {
-      pages = Array.from({ length: total }, (_, i) => i + 1);
-    }
-    if (state.excludeFirst) {
-      pages = pages.filter((n) => n !== 1);
-    }
-
-    const colour = hexToRgb(state.color);
-    const marginPt = Number(state.margin) * 2.835; // mm → pt (1mm = 2.835pt)
-    const fontSize = Number(state.fontSize);
-
-    for (const pageNum of pages) {
-      const page = doc.getPage(pageNum - 1);
-      const { width: pw, height: ph } = page.getSize();
-      const text = state.template.replace(/\{page\}/g, String(pageNum)).replace(/\{total\}/g, String(total));
-      const textWidth = font.widthOfTextAtSize(text, fontSize);
-      const placement = positionFor(state.placement, pw, ph, textWidth, fontSize, marginPt);
-
-      page.drawText(text, {
-        x: placement.x,
-        y: placement.y,
-        size: fontSize,
-        font,
-        color: rgb(colour.r, colour.g, colour.b),
-      });
-    }
-
-    const out = await doc.save();
-    const baseName = state.file.name.replace(/\.pdf$/i, '') || 'document';
-    downloadBlob(new Blob([out], { type: 'application/pdf' }), `${baseName}-stamped.pdf`);
-    wire.setStatus(`Stamped ${pages.length} page${pages.length === 1 ? '' : 's'} into ${baseName}-stamped.pdf (${formatBytes(out.length)}).`);
-    showToast(`Saved ${baseName}-stamped.pdf`);
-  } catch (error) {
-    console.error('Footer stamp failed:', error);
-    wire.setStatus(error && error.message ? error.message : 'Could not stamp the PDF.');
-    showToast('Could not stamp the PDF.', { error: true });
-  } finally {
-    setBusy(button, false, 'Stamp footer');
-  }
+/* ------------------------------------------------------------- redaction ---- */
+function terms() {
+  return String(state.form.terms || '')
+    .split(/[\n,]/)
+    .map((term) => term.trim())
+    .filter((term) => term.length > 0);
 }
 
-function positionFor(placement, pageW, pageH, textW, fontSize, margin) {
-  // PDF origin is bottom-left.
-  let x;
-  if (placement.endsWith('center')) x = (pageW - textW) / 2;
-  else if (placement.endsWith('right')) x = pageW - textW - margin;
-  else x = margin;
-  let y;
-  if (placement.startsWith('top')) y = pageH - margin - fontSize;
-  else y = margin;
-  return { x, y };
-}
-
-function parseRange(text, total) {
-  if (!text) return [];
-  const out = new Set();
-  for (const chunk of text.split(',').map((s) => s.trim()).filter(Boolean)) {
-    const m = chunk.match(/^(\d+)(?:\s*-\s*(\d+))?$/);
-    if (!m) continue;
-    const a = parseInt(m[1], 10);
-    const b = m[2] ? parseInt(m[2], 10) : a;
-    if (Number.isNaN(a) || Number.isNaN(b)) continue;
-    const [from, to] = a <= b ? [a, b] : [b, a];
-    for (let i = from; i <= to; i += 1) {
-      if (i >= 1 && i <= total) out.add(i);
-    }
-  }
-  return Array.from(out).sort((a, b) => a - b);
-}
-
-// ---------------------------------------------------------------------------
-// 3. Redact
-// ---------------------------------------------------------------------------
-
-function buildRedactPanel() {
-  const root = h('div', { class: 'finish-sub' });
-  const fileArea = buildFileArea({ statusText: 'No PDF yet.' });
-
-  const settings = [
-    textAreaRow('Terms (one per line)', 'terms', '', 'A line per phrase. Matching is case-insensitive.'),
-    colorRow('Box colour', 'color', '#000000'),
-    rangeRow('Padding', 'padding', 0, 12, 2, 'pt'),
-    h('label', { class: 'finish-row finish-row-check' }, [
-      h('input', { type: 'checkbox', 'data-setting': 'flatten', checked: false }),
-      h('span', null, 'Flatten page to image so the text really is gone (slower, larger file)'),
-    ]),
-    rangeRow('Flatten DPI', 'dpi', 96, 300, 150, 'dpi'),
-    selectRow('Pages', 'pages', [['all', 'All pages'], ['range', 'A range…']]),
-    textRow('Range', 'range', '1', 'e.g. 2-9'),
-  ];
-
-  root.append(
-    h('div', { class: 'finish-sub-head' }, [
-      h('h3', null, 'Redact'),
-      h('p', null, 'Paint an opaque box over every occurrence of a term, optionally flatten the page to an image so the text really is gone. The PDF text layer under the box survives unless you tick the flatten switch.'),
-    ]),
-    h('div', { class: 'finish-sub-body' }, [
-      h('aside', { class: 'finish-settings' }, [
-        h('h4', { class: 'finish-settings-title' }, 'Redaction'),
-        ...settings,
-      ]),
-      fileArea,
-    ]),
-  );
-
-  const state = {
-    file: null,
-    terms: '',
-    color: '#000000',
-    padding: 2,
-    flatten: false,
-    dpi: 150,
-    pages: 'all',
-    range: '',
-  };
-  const wire = wireFileArea(root, state, { accept: 'application/pdf,.pdf', multiple: false });
-  wireSettings(root, state, {
-    terms: 'terms',
-    color: 'color',
-    padding: 'padding',
-    flatten: 'flatten',
-    dpi: 'dpi',
-    pages: 'pages',
-    range: 'range',
+async function collectPages(root) {
+  const range = parsePageRanges(state.form.redactRange, state.pageCount);
+  if (!range.ok) return { error: 'Pages need to look like 1-3,7 or "all".' };
+  const include = new Set();
+  range.ranges.forEach(({ start, end }) => {
+    for (let page = start; page <= end; page += 1) include.add(page - 1);
   });
-
-  // Disable / dim the DPI row unless flatten is on.
-  const dpiRowEl = root.querySelector('[data-setting="dpi"]')?.closest('label');
-  const syncDpi = () => {
-    if (!dpiRowEl) return;
-    const off = !state.flatten;
-    dpiRowEl.style.opacity = off ? '0.45' : '1';
-    dpiRowEl.style.pointerEvents = off ? 'none' : 'auto';
-  };
-  syncDpi();
-  root.querySelector('[data-setting="flatten"]').addEventListener('change', syncDpi);
-
-  // Range row visibility.
-  const rangeRowEl = root.querySelector('[data-setting="range"]')?.closest('label');
-  const syncRange = () => {
-    if (!rangeRowEl) return;
-    const off = state.pages !== 'range';
-    rangeRowEl.style.opacity = off ? '0.45' : '1';
-    rangeRowEl.style.pointerEvents = off ? 'none' : 'auto';
-  };
-  syncRange();
-  root.querySelector('[data-setting="pages"]').addEventListener('change', syncRange);
-
-  const actionBtn = root.querySelector('[data-action]');
-  actionBtn.querySelector('span').textContent = 'Redact & save';
-  actionBtn.addEventListener('click', () => redactRun(root, state, wire));
-  return root;
+  return { include, range };
 }
 
-async function redactRun(root, state, wire) {
-  if (!state.file) {
-    showToast('Choose a PDF first.', { error: true });
-    return;
+async function scanText() {
+  const doc = await openPdfDocument(state.buffer.slice(0));
+  const pages = [];
+  for (let index = 1; index <= doc.numPages; index += 1) {
+    const page = await doc.getPage(index);
+    const content = await page.getTextContent();
+    pages.push(content.items.filter((item) => typeof item.str === 'string'));
+    page.cleanup();
   }
-  const terms = (state.terms || '').split('\n').map((s) => s.trim()).filter(Boolean);
-  if (!terms.length) {
-    showToast('Add at least one term to redact.', { error: true });
-    return;
-  }
-  const button = root.querySelector('[data-action]');
-  setBusy(button, true, 'Redacting…');
-  wire.setStatus(`Searching for ${terms.length} term${terms.length === 1 ? '' : 's'}…`);
-  try {
-    if (state.flatten) {
-      await redactWithFlatten(state, terms, wire);
-    } else {
-      await redactWithBoxes(state, terms, wire);
-    }
-  } catch (error) {
-    console.error('Redact failed:', error);
-    wire.setStatus(error && error.message ? error.message : 'Could not redact the PDF.');
-    showToast('Could not redact the PDF.', { error: true });
-  } finally {
-    setBusy(button, false, 'Redact & save');
-  }
+  await doc.destroy();
+  return pages;
 }
 
-/**
- * Cheap path: draw an opaque black rectangle over every match's
- * bounding box. The text layer underneath is *not* removed — a copy
- * paste of the original text would still reveal it. The README
- * explicitly warns about this: "Finish paints an opaque layer over
- * redacted words, which hides them but does not remove them — tick
- * 'Flatten page to image' when the text itself has to go."
- */
-async function redactWithBoxes(state, terms, wire) {
-  const { PDFDocument, rgb } = await loadPdfLib();
-  const pdfjs = await loadPdfJs();
-  const bytes = await readFileBytes(state.file);
-  const doc = await PDFDocument.load(bytes, { updateMetadata: false });
-  const total = doc.getPageCount();
-  const targets = resolvePageSet(state, total);
-  const paddingPt = Number(state.padding);
-  const colour = hexToRgb(state.color);
-
-  // We need the original PDF so pdf.js can read it without disturbing
-  // the pdf-lib document we're writing to.
-  const sourceDoc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
-  const lowerTerms = terms.map((t) => t.toLowerCase());
-
-  let matches = 0;
-  for (const pageNum of targets) {
-    wire.setStatus(`Redacting page ${pageNum}/${total}…`);
-    const page = await sourceDoc.getPage(pageNum);
-    const viewport = page.getViewport({ scale: 1 });
-    const text = await page.getTextContent();
-    const pageObj = doc.getPage(pageNum - 1);
-    const { width: pw, height: ph } = pageObj.getSize();
-
-    // pdf.js returns items in PDF user space (origin bottom-left). We
-    // collect the runs of consecutive items whose joined text contains
-    // a term, then take the union of their boxes.
-    for (let i = 0; i < text.items.length; i += 1) {
-      // Try every term against the joined text starting at item i.
-      const joined = joinRun(text.items, i, 6);
-      const lower = joined.text.toLowerCase();
-      const hitIdx = lowerTerms.findIndex((t) => lower.includes(t));
-      if (hitIdx === -1) continue;
-      // We found a hit. Compute the box covering items i .. i+joined.count-1.
-      const items = text.items.slice(i, i + joined.count);
-      const box = unionBox(items, viewport, pageObj);
-      pageObj.drawRectangle({
-        x: box.x - paddingPt,
-        y: box.y - paddingPt,
-        width: box.width + paddingPt * 2,
-        height: box.height + paddingPt * 2,
-        color: rgb(colour.r, colour.g, colour.b),
-        opacity: 1,
-      });
-      matches += 1;
-      // Skip past this match so we don't redraw the same box per-item.
-      i += joined.count - 1;
-    }
-  }
-
-  const out = await doc.save();
-  const baseName = state.file.name.replace(/\.pdf$/i, '') || 'document';
-  downloadBlob(new Blob([out], { type: 'application/pdf' }), `${baseName}-redacted.pdf`);
-  wire.setStatus(`Painted ${matches} box${matches === 1 ? '' : 'es'} over ${targets.length} page${targets.length === 1 ? '' : 's'} into ${baseName}-redacted.pdf.`);
-  showToast(`Saved ${baseName}-redacted.pdf`);
-}
-
-/**
- * Strong path: rasterise every targeted page to an image, draw the
- * black redaction boxes on the bitmap, and re-embed the image in a
- * new PDF. The text layer is destroyed; the file is a flat picture.
- */
-async function redactWithFlatten(state, terms, wire) {
-  const { PDFDocument, rgb } = await loadPdfLib();
-  const pdfjs = await loadPdfJs();
-  const bytes = await readFileBytes(state.file);
-  const sourceDoc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
-  const total = sourceDoc.numPages;
-  const targets = resolvePageSet(state, total);
-  const out = await PDFDocument.create();
-  const dpi = Number(state.dpi);
-  const scale = dpi / 72;
-  const lowerTerms = terms.map((t) => t.toLowerCase());
-  const paddingPx = Number(state.padding) * scale;
-  const colour = hexToRgb(state.color);
-
-  for (const pageNum of targets) {
-    wire.setStatus(`Flattening page ${pageNum}/${total}…`);
-    const page = await sourceDoc.getPage(pageNum);
-    const viewport = page.getViewport({ scale });
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(viewport.width));
-    canvas.height = Math.max(1, Math.round(viewport.height));
-    const ctx = canvas.getContext('2d');
-    await page.render({ canvasContext: ctx, viewport, canvas }).promise;
-
-    // Paint boxes on the bitmap (canvas coordinates = viewport
-    // coordinates; PDF and canvas share the same origin if the page
-    // is not rotated).
-    const text = await page.getTextContent();
-    for (let i = 0; i < text.items.length; i += 1) {
-      const joined = joinRun(text.items, i, 6);
-      const hitIdx = lowerTerms.findIndex((t) => joined.text.toLowerCase().includes(t));
-      if (hitIdx === -1) continue;
-      const items = text.items.slice(i, i + joined.count);
-      const box = unionBox(items, viewport, { getSize: () => ({ width: viewport.width, height: viewport.height }) });
-      ctx.fillStyle = state.color || '#000000';
-      ctx.fillRect(box.x - paddingPx, box.y - paddingPx, box.width + paddingPx * 2, box.height + paddingPx * 2);
-      i += joined.count - 1;
-    }
-
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
-    const jpeg = new Uint8Array(await blob.arrayBuffer());
-    const image = await out.embedJpg(jpeg);
-    const newPage = out.addPage([viewport.width, viewport.height]);
-    newPage.drawImage(image, { x: 0, y: 0, width: viewport.width, height: viewport.height });
-  }
-
-  const saved = await out.save();
-  const baseName = state.file.name.replace(/\.pdf$/i, '') || 'document';
-  downloadBlob(new Blob([saved], { type: 'application/pdf' }), `${baseName}-redacted-flat.pdf`);
-  wire.setStatus(`Flattened ${targets.length} page${targets.length === 1 ? '' : 's'} into ${baseName}-redacted-flat.pdf (${formatBytes(saved.length)}).`);
-  showToast(`Saved ${baseName}-redacted-flat.pdf`);
-}
-
-function joinRun(items, start, maxCount) {
-  let text = '';
-  for (let i = start; i < Math.min(items.length, start + maxCount); i += 1) {
-    text += items[i].str;
-  }
-  return { text, count: Math.min(maxCount, items.length - start) };
-}
-
-function unionBox(items, viewport, pageObj) {
-  // Compute the union of item.transform-driven boxes in viewport
-  // (top-left origin) coordinates.
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const item of items) {
-    const tx = item.transform;
-    if (!tx) continue;
-    const x = tx[4];
-    const y = tx[5];
-    const w = item.width || 0;
-    const h = item.height || Math.abs(tx[3]) || 0;
-    // PDF y origin is bottom-left; viewport origin is top-left.
-    // transform[5] is the baseline; subtract height to get the top.
-    const top = (viewport.height - (y + h));
-    const left = x;
-    const right = x + w;
-    const bottom = top + h;
-    if (left < minX) minX = left;
-    if (top < minY) minY = top;
-    if (right > maxX) maxX = right;
-    if (bottom > maxY) maxY = bottom;
-  }
-  if (!Number.isFinite(minX)) {
-    return { x: 0, y: 0, width: 0, height: 0 };
-  }
-  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
-}
-
-function resolvePageSet(state, total) {
-  if (state.pages === 'range') {
-    return parseRange(state.range, total);
-  }
-  return Array.from({ length: total }, (_, i) => i + 1);
-}
-
-// ---------------------------------------------------------------------------
-// 4. Checksum
-// ---------------------------------------------------------------------------
-
-function buildChecksumPanel() {
-  const root = h('div', { class: 'finish-sub' });
-  const fileArea = buildFileArea({ statusText: 'No PDF yet.' });
-
-  const settings = [
-    selectRow('Algorithm', 'algorithm', [
-      ['SHA-256', 'SHA-256 (recommended)'],
-      ['SHA-384', 'SHA-384'],
-      ['SHA-512', 'SHA-512'],
-      ['SHA-1', 'SHA-1 (legacy)'],
-    ]),
-    selectRow('Encoding', 'encoding', [
-      ['hex', 'Hex (lowercase)'],
-      ['hex-upper', 'Hex (uppercase)'],
-      ['base64', 'Base64'],
-    ]),
-    h('label', { class: 'finish-row finish-row-check' }, [
-      h('input', { type: 'checkbox', 'data-setting': 'sidecar', checked: true }),
-      h('span', null, 'Also write a sidecar `.sum` file with the digest and metadata'),
-    ]),
-  ];
-
-  root.append(
-    h('div', { class: 'finish-sub-head' }, [
-      h('h3', null, 'Checksum'),
-      h('p', null, 'Hash the PDF bytes with the algorithm you choose, and optionally write a sidecar `.sum` file so you can verify the file you sent is the file that arrived.'),
-    ]),
-    h('div', { class: 'finish-sub-body' }, [
-      h('aside', { class: 'finish-settings' }, [
-        h('h4', { class: 'finish-settings-title' }, 'Hash'),
-        ...settings,
-      ]),
-      fileArea,
-    ]),
-  );
-
-  const state = { file: null, algorithm: 'SHA-256', encoding: 'hex', sidecar: true };
-  const wire = wireFileArea(root, state, { accept: '*/*', multiple: false });
-  wireSettings(root, state, {
-    algorithm: 'algorithm',
-    encoding: 'encoding',
-    sidecar: 'sidecar',
-  });
-
-  const actionBtn = root.querySelector('[data-action]');
-  actionBtn.querySelector('span').textContent = 'Take checksum';
-  actionBtn.addEventListener('click', () => checksumRun(root, state, wire));
-  return root;
-}
-
-async function checksumRun(root, state, wire) {
-  if (!state.file) {
-    showToast('Choose a PDF first.', { error: true });
-    return;
-  }
-  const button = root.querySelector('[data-action]');
-  setBusy(button, true, 'Hashing…');
-  wire.setStatus(`Hashing ${state.file.name} with ${state.algorithm}…`);
-  try {
-    const bytes = await readFileBytes(state.file);
-    const digest = await crypto.subtle.digest(state.algorithm, bytes);
-    const hex = toHex(digest);
-    const encoded = formatDigest(hex, state.encoding);
-    const stamp = new Date().toISOString();
-
-    // Always show the digest in the status line.
-    wire.setStatus(`${state.algorithm}: ${encoded}  (${formatBytes(bytes.length)}, ${stamp})`);
-
-    if (state.sidecar) {
-      const sidecar = `${encoded}  ${state.file.name}  ${stamp}\n`;
-      const baseName = state.file.name.replace(/\.pdf$/i, '') || 'document';
-      downloadBlob(new Blob([sidecar], { type: 'text/plain;charset=utf-8' }), `${baseName}.${state.algorithm.toLowerCase()}.sum`);
-      showToast(`Saved ${baseName}.${state.algorithm.toLowerCase()}.sum`);
-    } else {
-      // Copy to clipboard for convenience.
-      try {
-        await navigator.clipboard.writeText(encoded);
-        showToast('Digest copied to clipboard.');
-      } catch (err) {
-        showToast(encoded);
+/* Match each term against a whole line, then map the hit back onto the text
+   items so the box covers only the characters that matched. */
+function findInItems(items, list, { ignoreCase, wholeWord }) {
+  const hits = [];
+  for (const line of groupLines(items)) {
+    let text = '';
+    const spans = [];
+    line.forEach((item, index) => {
+      if (index) text += ' ';
+      const start = text.length;
+      text += item.str;
+      spans.push({ item, start, end: text.length });
+    });
+    if (!text.trim()) continue;
+    for (const term of list) {
+      const pattern = wholeWord ? `\\b${escapeRegExp(term)}\\b` : escapeRegExp(term);
+      const re = new RegExp(pattern, ignoreCase ? 'gi' : 'g');
+      let match = re.exec(text);
+      while (match) {
+        const from = match.index;
+        const to = from + match[0].length;
+        const rects = spans
+          .filter((span) => span.end > from && span.start < to)
+          .map((span) => charRect(span.item, span, from, to));
+        if (rects.length) hits.push({ term, rects, text: match[0] });
+        if (re.lastIndex === from) re.lastIndex += 1;
+        match = re.exec(text);
       }
     }
+  }
+  return hits;
+}
+
+function charRect(item, span, from, to) {
+  const x = item.transform[4];
+  const y = item.transform[5];
+  const length = Math.max(1, span.end - span.start);
+  const scale = item.str.length ? item.width / item.str.length : length;
+  const left = Math.max(from, span.start) - span.start;
+  const right = Math.min(to, span.end) - span.start;
+  const height = (item.height || 10) * 0.94;
+  return {
+    x: x + left * scale,
+    y,
+    width: Math.max(2, (right - left) * scale),
+    height: Math.max(5, height),
+  };
+}
+
+/* pdf.js hands back one item per run of glyphs; stitch runs that share a
+   baseline into lines so a phrase can be matched across them. */
+function groupLines(items) {
+  const lines = [];
+  let current = [];
+  let lastY = null;
+  for (const item of items) {
+    const y = item.transform[5];
+    if (lastY !== null && Math.abs(y - lastY) > Math.max(2, (item.height || 10) * 0.45)) {
+      if (current.length) lines.push(current);
+      current = [];
+    }
+    current.push(item);
+    lastY = y;
+    if (item.hasEOL) {
+      if (current.length) lines.push(current);
+      current = [];
+      lastY = null;
+    }
+  }
+  if (current.length) lines.push(current);
+  return lines;
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function findMatches(root) {
+  const box = q('#fnFindings', root);
+  const hint = q('#fnRedactHint', root);
+  if (!box) return;
+  const list = terms();
+  if (!state.buffer || !list.length) {
+    box.hidden = true;
+    state.matches = [];
+    if (hint) hint.textContent = state.buffer ? 'Type a term to see how many hits there are.' : 'Open a PDF, then list the words to cover.';
+    repaintPreview(root);
+    return;
+  }
+  if (hint) hint.textContent = 'Scanning the text layer…';
+  try {
+    const pages = await scanText();
+    const { include, error } = await collectPages(root);
+    if (error) {
+      if (hint) { hint.textContent = error; hint.classList.add('is-error'); }
+      return;
+    }
+    const perTerm = new Map(list.map((term) => [term, { count: 0, pages: new Set() }]));
+    const matches = [];
+    pages.forEach((items, index) => {
+      if (!include.has(index)) return;
+      const hits = findInItems(items, list, { ignoreCase: state.form.ignoreCase, wholeWord: state.form.wholeWord });
+      for (const hit of hits) {
+        perTerm.get(hit.term).count += 1;
+        perTerm.get(hit.term).pages.add(index + 1);
+        matches.push({ page: index, ...hit });
+      }
+    });
+    state.matches = matches;
+    box.hidden = false;
+    box.replaceChildren(
+      ...list.map((term) => {
+        const found = perTerm.get(term);
+        const pagesText = [...found.pages].slice(0, 6).join(', ');
+        return el('div', { class: `fn-finding${found.count ? ' is-hit' : ''}` }, [
+          el('span', { class: 'fn-finding-term', text: term }),
+          el('span', { class: 'fn-finding-count', text: found.count ? `${found.count}×` : 'no match' }),
+          el('span', { class: 'fn-finding-pages', text: found.count ? `p. ${pagesText}${found.pages.size > 6 ? '…' : ''}` : '' }),
+        ]);
+      }),
+    );
+    if (hint) {
+      hint.classList.remove('is-error');
+      hint.textContent = `${matches.length} ${matches.length === 1 ? 'spot' : 'spots'} across ${new Set(matches.map((match) => match.page + 1)).size} page${new Set(matches.map((match) => match.page + 1)).size === 1 ? '' : 's'} · ${state.form.flatten ? 'pages will be flattened, so the characters are gone' : 'ink only — the text layer still holds the words unless you flatten'}`;
+    }
+    repaintPreview(root);
   } catch (error) {
-    console.error('Checksum failed:', error);
-    wire.setStatus(error && error.message ? error.message : 'Could not hash the file.');
-    showToast('Could not hash the file.', { error: true });
+    console.error(error);
+    if (hint) { hint.textContent = `The text layer could not be read: ${error?.message ?? error}`; hint.classList.add('is-error'); }
+  }
+}
+
+async function blackOut(root) {
+  if (!state.buffer) return toast('Open a PDF first.', true);
+  const list = terms();
+  if (!list.length) return toast('Add at least one term to cover.', true);
+  if (!state.matches.length) return toast('Nothing matched those terms — try a looser spelling.', true);
+  await withBusy(root, '#fnRedactGo', state.form.flatten ? 'Flattening…' : 'Covering…', async () => {
+    const { PDFDocument, rgb } = await loadPdfLib();
+    const doc = await PDFDocument.load(state.buffer.slice(0), { ignoreEncryption: true, updateMetadata: false });
+    const ink = hexToRgb(state.form.redactColour);
+    const pad = Number(state.form.redactPad) || 0;
+    const pages = doc.getPages();
+    for (const match of state.matches) {
+      const page = pages[match.page];
+      if (!page) continue;
+      for (const rect of match.rects) {
+        page.drawRectangle({
+          x: rect.x - pad,
+          y: rect.y - pad - (rect.height - 1.2),
+          width: rect.width + pad * 2,
+          height: rect.height + pad * 2,
+          color: rgb(...ink),
+          borderWidth: 0,
+        });
+      }
+    }
+    let out = await doc.save({ useObjectStreams: false });
+    if (state.form.flatten) {
+      out = await flattenPages(out, state.matches.map((match) => match.page));
+    }
+    downloadBlob(new Blob([out], { type: 'application/pdf' }), `${fileNameWithoutExtension(state.name)}${state.form.flatten ? '-redacted' : '-covered'}.pdf`);
+    state.buffer = out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
+    state.size = out.byteLength;
+    await findMatches(root);
+    await computeHash(root);
+    toast(state.form.flatten ? 'Redacted for real — those pages are images now.' : 'Covered. Tick “Flatten page to image” if the text must be gone.');
+  });
+}
+
+async function flattenPages(pdfBytes, pageIndexes) {
+  const { PDFDocument } = await loadPdfLib();
+  const pdfjs = await loadPdfJs();
+  const src = await PDFDocument.load(pdfBytes, { ignoreEncryption: true, updateMetadata: false });
+  const view = await pdfjs.getDocument({ data: pdfBytes.slice(0), isEvalSupported: false }).promise;
+  const flat = new Set(pageIndexes);
+  const out = await PDFDocument.create();
+  for (const [get, set] of [['getTitle', 'setTitle'], ['getAuthor', 'setAuthor'], ['getSubject', 'setSubject'], ['getCreator', 'setCreator'], ['getProducer', 'setProducer']]) {
+    const value = src[get]();
+    if (value) out[set](value);
+  }
+  const keywords = src.getKeywords();
+  if (keywords) out.setKeywords(String(keywords).split(',').map((word) => word.trim()).filter(Boolean));
+  for (const [get, set] of [['getCreationDate', 'setCreationDate'], ['getModificationDate', 'setModificationDate']]) {
+    const date = src[get]();
+    if (date) out[set](date);
+  }
+  for (let index = 0; index < src.getPageCount(); index += 1) {
+    if (!flat.has(index)) {
+      const [copied] = await out.copyPages(src, [index]);
+      out.addPage(copied);
+      continue;
+    }
+    const page = await view.getPage(index + 1);
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(3, Math.max(2, 1600 / base.width));
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: context, viewport }).promise;
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+    const binary = atob(dataUrl.split(',')[1]);
+    const raw = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) raw[i] = binary.charCodeAt(i);
+    const image = await out.embedJpg(raw);
+    const size = src.getPage(index).getSize();
+    const newPage = out.addPage([size.width, size.height]);
+    newPage.drawImage(image, { x: 0, y: 0, width: size.width, height: size.height });
+    page.cleanup();
+  }
+  await view.destroy();
+  return out.save({ useObjectStreams: false });
+}
+
+/* ------------------------------------------------------------- checksum ---- */
+async function computeHash(root) {
+  const box = q('#fnHashValue', root);
+  const hint = q('#fnHashHint', root);
+  if (!box) return;
+  if (!state.buffer) {
+    box.value = '';
+    state.hash = '';
+    if (hint) hint.textContent = 'No file open.';
+    return;
+  }
+  if (hint) hint.textContent = 'Hashing…';
+  try {
+    const digest = await crypto.subtle.digest(state.form.algo, state.buffer.slice(0));
+    const hex = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    state.hash = hex;
+    box.value = hex;
+    if (hint) hint.innerHTML = `${bytes(state.size)} · <code>${escapeHtml(state.name)}</code> — quote the digest when you send the file.`;
+    const verify = q('#fnHashVerify', root);
+    if (verify?.value) compareHash(verify.value, root);
+  } catch (error) {
+    state.hash = '';
+    box.value = '';
+    if (hint) { hint.textContent = `The browser refused to hash this file: ${error?.message ?? error}`; hint.classList.add('is-error'); }
+  }
+}
+
+function compareHash(value, root) {
+  const hint = q('#fnHashHint', root);
+  if (!hint) return;
+  const clean = String(value || '').trim().toLowerCase().replace(/\s+/g, '');
+  if (!clean) {
+    hint.classList.remove('is-error', 'is-match');
+    hint.textContent = state.hash ? `${bytes(state.size)} · ${state.name} — quote the digest when you send the file.` : 'No file open.';
+    return;
+  }
+  if (!state.hash) {
+    hint.classList.add('is-error');
+    hint.classList.remove('is-match');
+    hint.textContent = 'Open the PDF this digest belongs to.';
+    return;
+  }
+  const same = clean === state.hash;
+  hint.classList.toggle('is-match', same);
+  hint.classList.toggle('is-error', !same);
+  hint.textContent = same ? 'Match — this is byte-for-byte the same file.' : 'No match. This file is not the one that digest was taken from.';
+}
+
+/* ------------------------------------------------------------- preview ---- */
+async function renderPreview(root) {
+  const holder = q('#fnPreview', root);
+  const canvas = q('#fnCanvas', root);
+  if (!holder || !canvas) return;
+  if (!state.buffer || state.mode === 'meta' || state.mode === 'hash') {
+    holder.hidden = true;
+    return;
+  }
+  holder.hidden = false;
+  if (state.busy) return;
+  try {
+    const pdfjs = await loadPdfJs();
+    const doc = await pdfjs.getDocument({ data: state.buffer.slice(0), isEvalSupported: false }).promise;
+    const page = await doc.getPage(1);
+    const base = page.getViewport({ scale: 1 });
+    const scale = 240 / base.width;
+    const viewport = page.getViewport({ scale });
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    const context = canvas.getContext('2d');
+    await page.render({ canvasContext: context, viewport }).promise;
+    drawOverlay(context, viewport, page);
+    const note = q('#fnPreviewNote', root);
+    if (note) note.textContent = `page 1 · ${Math.round(base.width)}×${Math.round(base.height)} pt · ${state.pageCount || doc.numPages} pages`;
+    await doc.destroy();
+  } catch (error) {
+    console.warn('Preview unavailable:', error);
+    holder.hidden = true;
+  }
+}
+
+function drawOverlay(context, viewport, page) {
+  const { width, height } = page.getViewport({ scale: 1 });
+  const size = Number(state.form.stampSize) || 9;
+  const margin = Number(state.form.stampMargin) || 0;
+  if (state.mode === 'numbers') {
+    const text = stampLines(state.form.stampFirst ? 0 : 1);
+    if (text) {
+      const W = width;
+      const H = height;
+      const textWidth = text.length * size * 0.5;
+      const dx = state.form.position.includes('right') ? W - margin - textWidth : state.form.position.includes('left') ? margin : (W - textWidth) / 2;
+      const dyUp = state.form.position.includes('top') ? H - margin - size : state.form.position.includes('middle') ? (H - size) / 2 : margin;
+      const [x, y] = viewport.convertToViewportPoint(dx, dyUp);
+      context.save();
+      context.globalAlpha = 0.85;
+      context.fillStyle = state.form.stampColour;
+      context.font = `${Math.max(7, size * (viewport.scale || 1))}px "DM Mono", monospace`;
+      context.textBaseline = 'bottom';
+      context.fillText(text, x, y);
+      context.restore();
+    }
+  }
+  if (state.mode === 'redact') {
+    const pad = Number(state.form.redactPad) || 0;
+    context.save();
+    context.fillStyle = state.form.redactColour;
+    for (const match of state.matches.filter((item) => item.page === 0)) {
+      for (const rect of match.rects) {
+        const [x1, y1] = viewport.convertToViewportPoint(rect.x - pad, rect.y + rect.height + pad);
+        const [x2, y2] = viewport.convertToViewportPoint(rect.x + rect.width + pad, rect.y - pad);
+        context.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1) || 3, Math.abs(y2 - y1) || 3);
+      }
+    }
+    context.restore();
+  }
+}
+
+let previewTimer;
+function repaintPreview(root) {
+  if (!state.buffer || (state.mode !== 'numbers' && state.mode !== 'redact')) return;
+  window.clearTimeout(previewTimer);
+  previewTimer = window.setTimeout(() => renderPreview(root), 260);
+}
+
+/* --------------------------------------------------------------- busy ---- */
+async function withBusy(root, id, label, work) {
+  const button = q(id, root);
+  if (!button) return;
+  if (state.busy) return;
+  state.busy = true;
+  const original = button.innerHTML;
+  button.disabled = true;
+  button.classList.add('is-busy');
+  button.innerHTML = `<span class="export-spinner" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
+  try {
+    await work();
+  } catch (error) {
+    console.error(error);
+    toast(error?.message || 'That did not work — the message is in the console.', true);
   } finally {
-    setBusy(button, false, 'Take checksum');
+    state.busy = false;
+    button.disabled = false;
+    button.innerHTML = original;
+    button.classList.remove('is-busy');
   }
-}
-
-function toHex(buffer) {
-  const view = new Uint8Array(buffer);
-  let out = '';
-  for (let i = 0; i < view.length; i += 1) {
-    out += view[i].toString(16).padStart(2, '0');
-  }
-  return out;
-}
-
-function formatDigest(hex, encoding) {
-  if (encoding === 'base64') {
-    let bin = '';
-    for (let i = 0; i < hex.length; i += 2) {
-      bin += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16));
-    }
-    return btoa(bin);
-  }
-  if (encoding === 'hex-upper') return hex.toUpperCase();
-  return hex;
-}
-
-// ---------------------------------------------------------------------------
-// Shared settings wiring (select / text / range / checkbox)
-// ---------------------------------------------------------------------------
-
-function wireSettings(root, state, mapping) {
-  for (const [domKey, stateKey] of Object.entries(mapping)) {
-    const el = root.querySelector(`[data-setting="${domKey}"]`);
-    if (!el) continue;
-    if (el.type === 'checkbox') {
-      el.checked = state[stateKey];
-      el.addEventListener('change', () => { state[stateKey] = el.checked; });
-    } else if (el.type === 'range') {
-      el.value = state[stateKey];
-      const labelEl = el.parentElement?.querySelector('[data-range-value]');
-      if (labelEl) labelEl.textContent = `${el.value}${el.dataset.unit || ''}`;
-      el.addEventListener('input', () => {
-        const num = Number(el.value);
-        state[stateKey] = Number.isFinite(num) ? num : el.value;
-        if (labelEl) labelEl.textContent = `${el.value}${el.dataset.unit || ''}`;
-      });
-    } else {
-      el.value = state[stateKey];
-      el.addEventListener('input', () => { state[stateKey] = el.value; });
-      el.addEventListener('change', () => { state[stateKey] = el.value; });
-    }
-  }
-}
-
-function selectRow(label, key, options) {
-  return h('label', { class: 'finish-row' }, [
-    h('span', { class: 'finish-row-label' }, label),
-    h('span', { class: 'finish-row-control' }, [
-      h('select', { 'data-setting': key },
-        options.map(([value, name]) => h('option', { value }, name))
-      ),
-      h('svg', { viewBox: '0 0 16 16', 'aria-hidden': 'true' },
-        h('path', { d: 'm4.5 6.25 3.5 3.5 3.5-3.5', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' })
-      ),
-    ]),
-  ]);
-}
-
-function textRow(label, key, placeholder, hint) {
-  return h('label', { class: 'finish-row' }, [
-    h('span', { class: 'finish-row-label' }, label),
-    h('span', { class: 'finish-row-control' }, [
-      h('input', { type: 'text', 'data-setting': key, placeholder, autocomplete: 'off', spellcheck: 'false' }),
-      hint ? h('span', { class: 'finish-row-hint' }, hint) : null,
-    ]),
-  ]);
-}
-
-function textAreaRow(label, key, placeholder, hint) {
-  return h('label', { class: 'finish-row finish-row-area' }, [
-    h('span', { class: 'finish-row-label' }, label),
-    h('span', { class: 'finish-row-control' }, [
-      h('textarea', { 'data-setting': key, placeholder, rows: 4, spellcheck: 'false' }),
-      hint ? h('span', { class: 'finish-row-hint' }, hint) : null,
-    ]),
-  ]);
-}
-
-function rangeRow(label, key, min, max, value, unit) {
-  return h('label', { class: 'finish-row' }, [
-    h('span', { class: 'finish-row-label' }, label),
-    h('span', { class: 'finish-row-control finish-row-range' }, [
-      h('input', { type: 'range', min, max, value, 'data-setting': key, 'data-unit': unit }),
-      h('span', { class: 'finish-row-value', 'data-range-value': 'true' }, `${value}${unit}`),
-    ]),
-  ]);
-}
-
-function colorRow(label, key, value) {
-  return h('label', { class: 'finish-row' }, [
-    h('span', { class: 'finish-row-label' }, label),
-    h('span', { class: 'finish-row-control finish-row-color' }, [
-      h('input', { type: 'color', value, 'data-setting': key }),
-    ]),
-  ]);
 }

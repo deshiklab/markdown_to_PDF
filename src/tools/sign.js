@@ -1,1042 +1,1253 @@
-// Sign tab. One cohesive flow:
-//
-//   1. Draw (or load) a signature on the pad. Strokes are stored as
-//      fractions of the pad box, not as pixels, so the same signature
-//      can be re-used on any device at any size. The pad keeps the
-//      most recent mark in memory and also writes a copy of the PNG
-//      to localStorage so it survives a reload.
-//   2. Pick a PDF. The first page renders into a panel with overlay
-//      handles — drag the signature to place it, drag the bottom-right
-//      handle to resize. Positions are stored as fractions of the page
-//      box, so a phone re-measure does not stretch the mark.
-//   3. Type a name, optional title, and an optional date under the
-//      signature.
-//   4. Optionally add a countersignature — a second pad, a second
-//      placement on the same page.
-//   5. Save. The "flat" toggle rasterises the page to an image so the
-//      signature is part of the page content, not a separate PDF
-//      object (so a copy-paste of the PDF won't reveal the underlying
-//      layer).
-//
-// All the README's Sign-specific traps are honoured here:
-//
-//   * Pad strokes are stored as fractions of the pad box (not pixels).
-//   * The canvas bitmap is sized to the box's clientWidth /
-//     clientHeight, so the ink sits exactly under the pen.
-//   * Each pdf.js render uses a fresh <canvas> (no second render on
-//     a painted canvas).
-//   * Overlay handles are positioned as percentages of the page box.
-//   * PDF coordinates are derived from display coordinates through
-//     the /Rotate quadrant maths in `displayToPdf` (src/render.js).
-
+/* Sign — draw a signature on a pad, keep the marks in this browser, then place
+   one on the dotted line with a name, a title and a date under it. A second
+   pad is there for whoever is countersigning. pdf-lib writes, pdf.js shows the
+   page, and the position you drag is the position that gets drawn. */
 import {
-  h, clear, showToast, readFileBytes, downloadBlob, formatBytes,
-  lazy, pickFile, readFileDataURL, readPref, writePref, debounce, clamp,
+  debounce,
+  downloadBlob,
+  el,
+  escapeHtml,
+  hasFiles,
+  loadPdfJs,
+  loadPdfLib,
+  pickFiles,
+  q,
+  qa,
+  store,
+  toast,
 } from '../lib.js';
-import { displayToPdf } from '../render.js';
+import { printButton } from '../page.js';
 
-const loadPdfLib = lazy(() => import('pdf-lib'));
-const loadPdfJs = lazy(() => import('pdfjs-dist/build/pdf.mjs'));
+const MODES = [
+  { id: 'pad', label: 'Draw the mark', note: 'Pad, ink, saved signatures' },
+  { id: 'place', label: 'Place it', note: 'Drag it onto the page' },
+  { id: 'seal', label: 'Check and seal', note: 'Countersign, flatten, save' },
+];
 
-// localStorage key for saved signatures. A signature is stored as
-// { id, label, png, createdAt } where png is a data URL.
-const SIGNATURES_KEY = 'folio:signatures:v1';
+const POSITIONS = ['top-left', 'top-center', 'top-right', 'middle-left', 'centre', 'middle-right', 'bottom-left', 'bottom-center', 'bottom-right'];
+
+const INKS = [
+  { value: '#16161a', label: 'black' },
+  { value: '#12307a', label: 'blue' },
+  { value: '#6b1f1f', label: 'red' },
+];
+
+const PARTY = {
+  a: { key: 'a', title: 'Your signature', short: 'Party A' },
+  b: { key: 'b', title: 'Countersignature', short: 'Party B' },
+};
+
+const defaults = {
+  mode: 'pad',
+  ink: '#12307a',
+  pen: 2.6,
+  knock: 214,
+  markA: '',
+  markB: '',
+  widthA: 132,
+  widthB: 116,
+  pageA: 1,
+  pageB: 1,
+  nameA: '',
+  nameB: '',
+  titleA: '',
+  titleB: '',
+  ruleA: 'dotted',
+  ruleB: 'dotted',
+  dateA: 'today',
+  dateB: 'today',
+  captionSize: 8.5,
+  captionInk: '#6b7368',
+  textInk: '#16161a',
+  previewPage: 1,
+  flatten: false,
+};
+
+const prefs = store('sign:v1', defaults);
+const markStore = store('sign:marks:v1', { marks: [] });
+
+const PAD_EXPORT_WIDTH = 1400;
+const PAD_HEIGHT = 190;
+
+const state = {
+  mode: prefs.read().mode,
+  form: { ...prefs.read() },
+  marks: markStore.read().marks ?? [],
+  strokes: [],
+  live: null,
+  drawing: false,
+  buffer: null,
+  name: '',
+  pageCount: 0,
+  pageSizes: [],
+  rotations: [],
+  busy: false,
+  render: null,
+};
+
+/* Each placed block: x and y are the top-left corner of the mark, in display
+   points (the page as it is shown, after /Rotate), so dragging is 1:1 with px. */
+const blocks = {
+  a: { x: 0, y: 0 },
+  b: { x: 0, y: 0 },
+};
+
+const downloadIcon = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5v8m0 0 3-3m-3 3-3-3M4.5 12.5v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3"/></svg>';
+const penIcon = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 16.5h4l9-9a1.9 1.9 0 0 0-2.7-2.7l-9 9z"/><path d="M11.4 6.2 13.8 8.6"/></svg>';
 
 export function start(root) {
-  const panel = h('div', { class: 'tool-sign' });
-
-  // The model:
-  //   pdfFile      — the chosen PDF (File | null)
-  //   pdfJsDoc     — the parsed pdf.js document (cached after pick)
-  //   pageIndex    — 0-based page number being signed
-  //   marks        — array of placed signatures. Each mark is:
-  //     { id, signatureId, xFrac, yFrac, wFrac, name, title, date,
-  //       isCountersign }
-  //   activeMarkId — id of the mark currently selected (for nudging)
-  //   flatten      — bool, whether to rasterise the page when saving
-  //   signatures   — array of saved signatures (from localStorage)
-  const state = {
-    pdfFile: null,
-    pdfJsDoc: null,
-    pageIndex: 0,
-    marks: [],
-    activeMarkId: null,
-    flatten: false,
-    signatures: readPref(SIGNATURES_KEY, []),
+  root.innerHTML = layout();
+  wire(root);
+  paintMode(root);
+  paintMarks(root);
+  requestAnimationFrame(() => sizePad(root));
+  return () => {
+    if (state.onResize) window.removeEventListener('resize', state.onResize);
+    state.observer?.disconnect();
+    state.strokes = [];
+    state.live = null;
   };
+}
 
-  // The current pad: a fresh Stroke[] while the user is drawing. Each
-  // stroke is { points: [{ x, y }, ...] } in pad-box fractions (0-1).
-  // 'currentPad' is the one being drawn into; 'editingPadId' is the
-  // mark whose signature pad is currently being edited (null when
-  // drawing a new one).
-  let editingPad = null; // { markId, stroke, lastPoint }
+/* ------------------------------------------------------------------ ui ---- */
+function layout() {
+  const form = state.form;
+  return `
+<div class="lab-shell sg-shell" id="sgShell" data-mode="${state.mode}">
+  <section class="panel sg-side" aria-labelledby="sg-side-title">
+    <div class="panel-header">
+      <div class="panel-title-group">
+        <span class="panel-index">01</span>
+        <div><h3 id="sg-side-title">The pad</h3><p id="sgSideNote">Draw once, sign many — saved in this browser</p></div>
+      </div>
+      <div class="panel-header-actions"><button class="button button-light" type="button" id="sgUploadBtn"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M10 13.5V4.2m0 0L6.9 7.3M10 4.2l3.1 3.1M4.5 12.5v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3"/></svg><span>Use an image</span></button></div>
+    </div>
 
-  // ------------------------------------------------------------------
-  // Layout
-  // ------------------------------------------------------------------
+    <div class="sg-pad-wrap">
+      <canvas id="sgPad" class="sg-pad" aria-label="Signature drawing pad. Draw with a mouse, finger or pen."></canvas>
+      <p class="sg-pad-note" id="sgPadNote">Sign inside the lines — the empty space is thrown away when you save.</p>
+    </div>
 
-  const padColumn = h('div', { class: 'sign-pad-col' });
-  const pageColumn = h('div', { class: 'sign-page-col' });
-  const footColumn = h('div', { class: 'sign-foot' });
+    <div class="sg-toolbar" role="group" aria-label="Pen">
+      <div class="sg-inks" id="sgInks">
+        ${INKS.map((ink) => `<button type="button" class="sg-ink${form.ink === ink.value ? ' is-on' : ''}" data-ink="${ink.value}" style="--ink:${ink.value}" aria-pressed="${form.ink === ink.value}" aria-label="${ink.label} ink"><span></span></button>`).join('')}
+      </div>
+      <label class="field sg-pen"><span class="field-label">Pen</span><input class="range-input" id="sgPen" type="range" min="1.2" max="6" step="0.2" value="${form.pen}" /></label>
+      <button class="button button-light" type="button" id="sgUndo">Undo</button>
+      <button class="button button-light" type="button" id="sgClearPad">Clear</button>
+    </div>
 
-  panel.append(
-    h('div', { class: 'sign-sub-head' }, [
-      h('h3', null, 'Sign'),
-      h('p', null, 'Draw a signature on the pad, drop it on a page of a PDF, add a name and date under it, then save. Countersignatures and a "flatten" toggle are at the bottom.'),
-    ]),
-    h('div', { class: 'sign-layout' }, [
-      padColumn,
-      pageColumn,
-    ]),
-    footColumn,
-  );
+    <div class="sg-save-row">
+      <label class="field grow"><span class="field-label">Name this signature</span><input class="text-input" id="sgMarkName" type="text" placeholder="Blue ink — passport size" autocomplete="off" /></label>
+      <button class="button button-export" type="button" id="sgSaveMark">${penIcon}<span>Keep it</span></button>
+    </div>
 
-  // ------------------------------------------------------------------
-  // Pad column (left) — drawing area + saved signatures list
-  // ------------------------------------------------------------------
+    <div class="sg-marks-head">
+      <h4>Saved on this device</h4>
+      <span class="lab-count" id="sgMarkCount">none yet</span>
+    </div>
+    <div class="sg-marks" id="sgMarks"></div>
+  </section>
 
-  const padFrame = h('div', { class: 'sign-pad-frame' });
-  const padCanvas = document.createElement('canvas');
-  padCanvas.className = 'sign-pad-canvas';
-  padFrame.append(padCanvas);
-  const padHint = h('div', { class: 'sign-pad-hint' }, 'Sign here');
-  padFrame.append(padHint);
+  <section class="panel sg-main" aria-labelledby="sg-main-title">
+    <div class="panel-header">
+      <div class="panel-title-group">
+        <span class="panel-index panel-index-green">02</span>
+        <div><h3 id="sg-main-title">On the dotted line</h3><p><span class="live-dot"></span> Nothing is uploaded — you download a new file</p></div>
+      </div>
+      <div class="panel-header-actions">${printButton()}<span class="lab-count" id="sgStat">no file</span></div>
+    </div>
 
-  // Overlay message shown when the user picks an existing signature.
-  const padStatus = h('div', { class: 'sign-pad-status' });
+    <div class="lab-modes" role="group" aria-label="Sign mode">
+      ${MODES.map((mode) => `<button type="button" class="lab-mode${state.mode === mode.id ? ' is-on' : ''}" data-mode-btn="${mode.id}" aria-pressed="${state.mode === mode.id}"><strong>${mode.label}</strong><small>${mode.note}</small></button>`).join('')}
+    </div>
 
-  const padActions = h('div', { class: 'sign-pad-actions' }, [
-    h('button', { class: 'button button-light', type: 'button', id: 'signClearPad' }, 'Clear pad'),
-    h('button', { class: 'button button-text', type: 'button', id: 'signUndoStroke' }, 'Undo'),
-    h('button', { class: 'button button-export', type: 'button', id: 'signSavePad' }, [
-      checkIcon(),
-      h('span', null, 'Save signature'),
-    ]),
-  ]);
+    <div class="lab-body">
+      <div class="sg-stage-panel" data-sg-panel="pad">
+        <p class="lab-help">Draw with a mouse, a finger or a stylus — the stroke gets thicker when you move slowly, thinner when you flick. <strong>Keep it</strong> stores the mark in this browser only, so the next document takes one click. If you already have a scan of your signature, use <em>Use an image</em> and Folio knocks the paper out.</p>
+        <div class="sg-knock">
+          <label class="field"><span class="field-label">Paper knockout for images</span><input class="range-input" id="sgKnock" type="range" min="0" max="250" step="2" value="${form.knock}" /></label>
+          <p class="lab-hint" id="sgKnockHint">${form.knock ? `Pixels lighter than ${form.knock} go transparent.` : 'Off — the whole image is kept.'}</p>
+        </div>
+        <div class="sg-card" id="sgCard"></div>
+      </div>
 
-  // Pad label / "edit existing" indicator.
-  const padLabelInput = h('input', {
-    type: 'text',
-    class: 'sign-pad-label',
-    placeholder: 'Signature label (e.g. "Work")',
-    value: '',
-    autocomplete: 'off',
-    spellcheck: 'false',
+      <div class="sg-stage-panel" data-sg-panel="place" hidden>
+        <div class="lab-drop" id="sgDrop" role="button" tabindex="0" aria-label="Choose a PDF to sign">
+          <span class="dropzone-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h5.2l3.3 3.3v9.7H6z"/><path d="M11 3.6v3.3h3.2M8.4 11h4M8.4 13.2h2.6"/></svg></span>
+          <strong>Drop the document</strong>
+          <span>or click to choose — it is opened here, never sent anywhere</span>
+          <span class="dropzone-button">Choose file</span>
+        </div>
+
+        <div class="sg-dropzone-off" id="sgNoFile">${emptyStateHtml()}</div>
+
+        <div class="sg-work" id="sgWork" hidden>
+          <div class="sg-work-head">
+            <label class="field sg-page-field"><span class="field-label">Preview page</span><input class="text-input" id="sgPreviewPage" type="number" min="1" step="1" value="${form.previewPage}" /></label>
+            <p class="lab-hint" id="sgStageHint">Drag a mark to move it. Arrow keys nudge, <kbd>Shift</kbd> + arrows move further.</p>
+          </div>
+          <div class="sg-stage" id="sgStage" data-print-root>
+            <div class="sg-paper" id="sgPaper">
+              <canvas id="sgCanvas" aria-label="The page you are signing, with the signature blocks on it"></canvas>
+              <button type="button" class="sg-handle" data-handle="a" hidden aria-label="Your signature — drag to move"><img alt="" /></button>
+              <button type="button" class="sg-handle" data-handle="b" hidden aria-label="Countersignature — drag to move"><img alt="" /></button>
+            </div>
+          </div>
+
+          <div class="sg-parties">
+            ${partyForm('a')}
+            ${partyForm('b')}
+          </div>
+
+          <div class="lab-actions">
+            <p class="lab-hint" id="sgPlaceHint">Pick a signature for each side, then drag it onto the line.</p>
+            <div class="lab-actions-row">
+              <button class="button button-text" type="button" data-quick="side">Side by side</button>
+              <button class="button button-text" type="button" data-quick="below">One under the other</button>
+              <button class="button button-text" type="button" data-quick="same">Same page for both</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sg-stage-panel" data-sg-panel="seal" hidden>
+        <p class="lab-help">What gets drawn, and how permanent it should be. <strong>Flatten the signed pages</strong> paints the page into one image, so the mark can no longer be lifted off — the price is that text on those pages stops being selectable.</p>
+        <div class="sg-summary" id="sgSummary"></div>
+        <div class="sg-seal-grid">
+          <label class="field field-switch"><input type="checkbox" class="switch-input" id="sgFlatten" ${form.flatten ? 'checked' : ''} /><span class="switch-track" aria-hidden="true"></span><span class="field-label">Flatten the signed pages</span></label>
+          <label class="field field-switch"><input type="checkbox" class="switch-input" id="sgRuleShadow" checked /><span class="switch-track" aria-hidden="true"></span><span class="field-label">Fade the caption to grey</span></label>
+        </div>
+        <div class="sg-honesty">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="10" cy="10" r="6.6"/><path d="M10 6.6v4.1M10 13.1v.6"/></svg>
+          <p>A drawn signature is a picture on the page, not a cryptographic one — there is no certificate and nothing to tell you if the file was changed afterwards. Quote a checksum when it matters.</p>
+          <button class="button button-light" type="button" id="sgGoFinish">Checksum it in Finish</button>
+        </div>
+        <div class="lab-actions">
+          <p class="lab-hint" id="sgSealHint">No document open.</p>
+          <button class="button button-export" type="button" id="sgSignGo">${downloadIcon}<span>Sign and save</span></button>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>`;
+}
+
+function emptyStateHtml() {
+  return '<div class="empty-state"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M3.5 14.5c2.4-6 4.2 3.2 6.4-1.6 1.4-3 2.2 2.6 4.6-.9"/></svg><p>Open a PDF and the page appears here, ready for a mark.</p></div>';
+}
+
+function partyForm(key) {
+  const party = PARTY[key];
+  const options = () => state.marks.map((mark) => `<option value="${mark.id}"${state.form[key === 'a' ? 'markA' : 'markB'] === mark.id ? ' selected' : ''}>${escapeHtml(mark.name)}</option>`).join('');
+  return `
+  <div class="sg-party" data-party="${key}">
+    <div class="sg-party-head">
+      <strong>${party.title}</strong>
+      <span class="sg-party-tag">${party.short}</span>
+    </div>
+    <div class="sg-party-fields">
+      <label class="field"><span class="field-label">Signature</span><select class="text-input" data-field="${key === 'a' ? 'markA' : 'markB'}" aria-label="${party.short} signature">${options() || '<option value="">Nothing saved yet</option>'}</select></label>
+      <label class="field"><span class="field-label">Page</span><input class="text-input" type="number" min="1" step="1" data-field="${key === 'a' ? 'pageA' : 'pageB'}" value="${state.form[key === 'a' ? 'pageA' : 'pageB']}" /></label>
+      <label class="field"><span class="field-label">Width</span><input class="text-input" type="number" min="40" max="420" step="2" data-field="${key === 'a' ? 'widthA' : 'widthB'}" value="${state.form[key === 'a' ? 'widthA' : 'widthB']}" /></label>
+      <label class="field"><span class="field-label">Name under the line</span><input class="text-input" type="text" data-field="${key === 'a' ? 'nameA' : 'nameB'}" value="${escapeHtml(state.form[key === 'a' ? 'nameA' : 'nameB'])}" placeholder="Deshika Rahman" autocomplete="off" /></label>
+      <label class="field"><span class="field-label">Title</span><input class="text-input" type="text" data-field="${key === 'a' ? 'titleA' : 'titleB'}" value="${escapeHtml(state.form[key === 'a' ? 'titleA' : 'titleB'])}" placeholder="Director, Studio" autocomplete="off" /></label>
+      <label class="field"><span class="field-label">Line</span><select class="text-input" data-field="${key === 'a' ? 'ruleA' : 'ruleB'}"><option value="none">nothing</option><option value="dotted"${state.form[key === 'a' ? 'ruleA' : 'ruleB'] === 'dotted' ? ' selected' : ''}>dotted</option><option value="solid"${state.form[key === 'a' ? 'ruleA' : 'ruleB'] === 'solid' ? ' selected' : ''}>solid</option></select></label>
+      <label class="field"><span class="field-label">Date</span><select class="text-input" data-field="${key === 'a' ? 'dateA' : 'dateB'}"><option value="none"${state.form[key === 'a' ? 'dateA' : 'dateB'] === 'none' ? ' selected' : ''}>no date</option><option value="today"${state.form[key === 'a' ? 'dateA' : 'dateB'] === 'today' ? ' selected' : ''}>today</option><option value="beside"${state.form[key === 'a' ? 'dateA' : 'dateB'] === 'beside' ? ' selected' : ''}>today, on the right</option></select></label>
+      <div class="field">
+        <span class="field-label">Snap to</span>
+        <div class="lab-pos-grid sg-pos-grid" role="group" aria-label="${party.short} position">
+          ${POSITIONS.map((position) => `<button type="button" class="lab-pos" data-pos="${key}:${position}" title="${position.replace(/-/g, ' ')}" aria-label="${party.short} ${position.replace(/-/g, ' ')}"><span></span></button>`).join('')}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ---------------------------------------------------------------- wiring ---- */
+function wire(root) {
+  const save = debounce(() => prefs.write(state.form), 250);
+
+  qa('[data-mode-btn]', root).forEach((node) => {
+    node.addEventListener('click', () => {
+      state.mode = node.dataset.modeBtn;
+      state.form.mode = state.mode;
+      save();
+      paintMode(root);
+    });
   });
 
-  padColumn.append(
-    h('div', { class: 'sign-pad-wrap' }, [
-      h('div', { class: 'sign-pad-head' }, [
-        h('h4', null, 'Signature pad'),
-        padLabelInput,
-      ]),
-      padFrame,
-      padStatus,
-      padActions,
-    ]),
-    h('div', { class: 'sign-pad-list-wrap' }, [
-      h('h4', { class: 'sign-list-title' }, 'Saved signatures'),
-      h('div', { class: 'sign-list', id: 'signList' }),
-      h('div', { class: 'sign-list-actions' }, [
-        h('button', { class: 'button button-light', type: 'button', id: 'signLoadScan' }, [
-          plusIcon(),
-          h('span', null, ' Load a scan'),
-        ]),
-        h('input', { type: 'file', accept: 'image/png,image/jpeg,image/svg+xml', hidden: true, id: 'signScanInput' }),
-      ]),
-    ]),
-  );
-
-  // ------------------------------------------------------------------
-  // Page column (right) — the live page preview with overlay
-  // ------------------------------------------------------------------
-
-  const pageStage = h('div', { class: 'sign-stage' });
-  const pageSurface = h('div', { class: 'sign-surface' });
-  const pageCanvas = document.createElement('canvas');
-  pageCanvas.className = 'sign-page-canvas';
-  pageSurface.append(pageCanvas);
-  const marksLayer = h('div', { class: 'sign-marks' });
-  pageSurface.append(marksLayer);
-  pageStage.append(pageSurface);
-
-  const pageToolbar = h('div', { class: 'sign-page-toolbar' }, [
-    h('button', { class: 'button button-light', type: 'button', id: 'signPickPdf' }, [
-      pageIcon(),
-      h('span', null, ' Choose PDF'),
-    ]),
-    h('button', { class: 'button button-text', type: 'button', id: 'signPrevPage', disabled: true }, '← Prev page'),
-    h('span', { class: 'sign-page-status', id: 'signPageStatus' }, 'No PDF yet.'),
-    h('button', { class: 'button button-text', type: 'button', id: 'signNextPage', disabled: true }, 'Next page →'),
-  ]);
-
-  const markActions = h('div', { class: 'sign-mark-actions' }, [
-    h('button', { class: 'button button-light', type: 'button', id: 'signAddCountersign' }, [
-      plusIcon(),
-      h('span', null, ' Add countersignature'),
-    ]),
-    h('span', { class: 'sign-mark-status', id: 'signMarkStatus' }, 'Pick a PDF, then drag a signature onto the page.'),
-  ]);
-
-  pageColumn.append(
-    h('div', { class: 'sign-page-head' }, [
-      h('h4', null, 'Page'),
-      markActions,
-    ]),
-    pageToolbar,
-    pageStage,
-  );
-
-  // ------------------------------------------------------------------
-  // Foot — flatten toggle + save
-  // ------------------------------------------------------------------
-
-  const flattenToggle = h('label', { class: 'sign-foot-toggle' }, [
-    h('input', { type: 'checkbox', id: 'signFlatten' }),
-    h('span', null, 'Flatten signed pages (the mark becomes part of the page image; text under it cannot be lifted off)'),
-  ]);
-
-  const footStatus = h('span', { class: 'sign-foot-status', id: 'signFootStatus' }, 'No PDF yet.');
-
-  const saveButton = h('button', { class: 'button button-export', type: 'button', id: 'signSavePdf' }, [
-    downloadIcon(),
-    h('span', null, 'Save signed PDF'),
-  ]);
-
-  footColumn.append(flattenToggle, footStatus, saveButton);
-
-  root.append(panel);
-
-  // ------------------------------------------------------------------
-  // Pad logic — pointer events on a single canvas, fractional points
-  // ------------------------------------------------------------------
-
-  let padCtx = null;
-  let padDPR = 1;
-  let padW = 0;
-  let padH = 0;
-  // The live stroke being drawn right now, in pad-box fractions.
-  // 'currentPad.strokes' is the list of committed strokes (each in
-  // fractions). While drawing, we add points to currentPad.liveStroke
-  // and re-render the canvas.
-  const padStrokes = []; // committed strokes, each [{x, y}, ...] in fractions
-  let liveStroke = null; // { points: [...] } in fractions
-  let padDirty = false;
-
-  function sizePadCanvas() {
-    const rect = padFrame.getBoundingClientRect();
-    // The 1px frame trick from the README: use clientWidth/Height so
-    // the bitmap is exactly the inner box, never the border.
-    padDPR = window.devicePixelRatio || 1;
-    padW = Math.max(1, Math.round(rect.width));
-    padH = Math.max(1, Math.round(rect.height));
-    padCanvas.width = Math.round(padW * padDPR);
-    padCanvas.height = Math.round(padH * padDPR);
-    padCanvas.style.width = `${padW}px`;
-    padCanvas.style.height = `${padH}px`;
-    padCtx = padCanvas.getContext('2d');
-    padCtx.scale(padDPR, padDPR);
-    redrawPad();
-  }
-
-  function redrawPad() {
-    if (!padCtx) return;
-    padCtx.clearRect(0, 0, padW, padH);
-    // The dotted baseline.
-    padCtx.save();
-    padCtx.strokeStyle = '#cfd9cb';
-    padCtx.setLineDash([4, 4]);
-    padCtx.lineWidth = 1;
-    padCtx.beginPath();
-    padCtx.moveTo(12, padH * 0.66);
-    padCtx.lineTo(padW - 12, padH * 0.66);
-    padCtx.stroke();
-    padCtx.restore();
-
-    padCtx.save();
-    padCtx.strokeStyle = '#243f33';
-    padCtx.lineWidth = 2;
-    padCtx.lineCap = 'round';
-    padCtx.lineJoin = 'round';
-    for (const stroke of padStrokes) drawStroke(stroke);
-    if (liveStroke) drawStroke(liveStroke.points);
-    padCtx.restore();
-  }
-
-  function drawStroke(points) {
-    if (!points || !points.length) return;
-    padCtx.beginPath();
-    padCtx.moveTo(points[0].x * padW, points[0].y * padH);
-    for (let i = 1; i < points.length; i += 1) {
-      padCtx.lineTo(points[i].x * padW, points[i].y * padH);
-    }
-    padCtx.stroke();
-  }
-
-  function padPointFromEvent(event) {
-    const rect = padCanvas.getBoundingClientRect();
-    const x = (event.clientX - rect.left) / rect.width;
-    const y = (event.clientY - rect.top) / rect.height;
-    return { x: clamp(x, 0, 1), y: clamp(y, 0, 1) };
-  }
-
-  function onPadDown(event) {
-    if (event.button !== undefined && event.button !== 0) return;
-    event.preventDefault();
-    padCanvas.setPointerCapture(event.pointerId);
-    const point = padPointFromEvent(event);
-    liveStroke = { points: [point] };
-    padDirty = true;
-    padHint.style.opacity = '0';
-    redrawPad();
-  }
-
-  function onPadMove(event) {
-    if (!liveStroke) return;
-    event.preventDefault();
-    const point = padPointFromEvent(event);
-    const last = liveStroke.points[liveStroke.points.length - 1];
-    // Skip near-duplicate points so the ink doesn't bloat.
-    if (last && Math.hypot(point.x - last.x, point.y - last.y) < 0.002) return;
-    liveStroke.points.push(point);
-    redrawPad();
-  }
-
-  function onPadUp(event) {
-    if (!liveStroke) return;
-    event.preventDefault();
-    if (liveStroke.points.length > 1) {
-      padStrokes.push(liveStroke.points);
-    }
-    liveStroke = null;
-    padCanvas.releasePointerCapture(event.pointerId);
-    redrawPad();
-  }
-
-  padCanvas.addEventListener('pointerdown', onPadDown);
-  padCanvas.addEventListener('pointermove', onPadMove);
-  padCanvas.addEventListener('pointerup', onPadUp);
-  padCanvas.addEventListener('pointercancel', onPadUp);
-
-  // Re-size on window resize so the canvas bitmap tracks the box.
-  const resizePad = debounce(sizePadCanvas, 80);
-  window.addEventListener('resize', resizePad);
-  // Defer initial sizing until the panel is in the DOM.
-  requestAnimationFrame(sizePadCanvas);
-
-  // Pad actions
-  panel.querySelector('#signClearPad').addEventListener('click', () => {
-    padStrokes.length = 0;
-    liveStroke = null;
-    padHint.style.opacity = '1';
-    padStatus.textContent = '';
-    padDirty = true;
-    redrawPad();
-  });
-  panel.querySelector('#signUndoStroke').addEventListener('click', () => {
-    padStrokes.pop();
-    if (!padStrokes.length) padHint.style.opacity = '1';
-    padDirty = true;
-    redrawPad();
-  });
-  panel.querySelector('#signSavePad').addEventListener('click', saveCurrentPadAsSignature);
-  panel.querySelector('#signLoadScan').addEventListener('click', () => panel.querySelector('#signScanInput').click());
-  panel.querySelector('#signScanInput').addEventListener('change', loadScanAsSignature);
-
-  // ------------------------------------------------------------------
-  // PDF + page render
-  // ------------------------------------------------------------------
-
-  panel.querySelector('#signPickPdf').addEventListener('click', async () => {
-    const files = await pickFile({ accept: 'application/pdf,.pdf', multiple: false });
-    if (files && files.length) loadPdf(files[0]);
-  });
-  panel.querySelector('#signPrevPage').addEventListener('click', () => {
-    if (!state.pdfJsDoc) return;
-    state.pageIndex = Math.max(0, state.pageIndex - 1);
-    renderPage();
-  });
-  panel.querySelector('#signNextPage').addEventListener('click', () => {
-    if (!state.pdfJsDoc) return;
-    state.pageIndex = Math.min(state.pdfJsDoc.numPages - 1, state.pageIndex + 1);
-    renderPage();
-  });
-  panel.querySelector('#signAddCountersign').addEventListener('click', () => {
-    addMark({ isCountersign: true });
-  });
-  panel.querySelector('#signFlatten').addEventListener('change', (e) => {
-    state.flatten = e.target.checked;
-  });
-  panel.querySelector('#signSavePdf').addEventListener('click', saveSignedPdf);
-
-  // Page drag-and-drop.
-  pageSurface.addEventListener('dragover', (e) => {
-    if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) {
-      e.preventDefault();
-      pageSurface.classList.add('is-drag');
-    }
-  });
-  pageSurface.addEventListener('dragleave', () => pageSurface.classList.remove('is-drag'));
-  pageSurface.addEventListener('drop', async (e) => {
-    pageSurface.classList.remove('is-drag');
-    if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files[0]) return;
-    const file = e.dataTransfer.files[0];
-    if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') {
-      showToast('Drop a PDF here.', { error: true });
-      return;
-    }
-    e.preventDefault();
-    loadPdf(file);
+  qa('[data-ink]', root).forEach((node) => {
+    node.addEventListener('click', () => {
+      state.form.ink = node.dataset.ink;
+      save();
+      qa('[data-ink]', root).forEach((other) => {
+        const on = other === node;
+        other.classList.toggle('is-on', on);
+        other.setAttribute('aria-pressed', String(on));
+      });
+      repaintPad(root);
+    });
   });
 
-  async function loadPdf(file) {
-    state.pdfFile = file;
-    state.pageIndex = 0;
-    state.marks = [];
-    state.activeMarkId = null;
-    pageToolbar.querySelector('#signPageStatus').textContent = `Loading ${file.name}…`;
-    footStatus.textContent = `Loaded ${file.name}.`;
-    try {
-      const pdfjs = await loadPdfJs();
-      const bytes = await readFileBytes(file);
-      state.pdfJsDoc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
-      pageToolbar.querySelector('#signPrevPage').disabled = false;
-      pageToolbar.querySelector('#signNextPage').disabled = false;
-      renderPage();
-    } catch (error) {
-      console.error('PDF load failed:', error);
-      pageToolbar.querySelector('#signPageStatus').textContent = 'Could not read this PDF.';
-      showToast('Could not read the PDF.', { error: true });
-    }
-  }
+  const pen = q('#sgPen', root);
+  pen?.addEventListener('input', () => {
+    state.form.pen = Number(pen.value);
+    save();
+  });
 
-  // The current "drawing scale" — pdf.js units * scale = CSS pixels.
-  // We pick a scale that fits a 720px max-width box, so a US Letter
-  // page at 72 DPI would render at scale = 720/612 ≈ 1.18.
-  let currentScale = 1;
-  let currentViewport = null;
-  let currentPageObj = null; // pdf.js page object for the current page
+  const knock = q('#sgKnock', root);
+  knock?.addEventListener('input', () => {
+    state.form.knock = Number(knock.value);
+    save();
+    const hint = q('#sgKnockHint', root);
+    if (hint) hint.textContent = state.form.knock ? `Pixels lighter than ${state.form.knock} go transparent.` : 'Off — the whole image is kept.';
+  });
 
-  async function renderPage() {
-    if (!state.pdfJsDoc) return;
-    const pageNum = state.pageIndex + 1;
-    pageToolbar.querySelector('#signPageStatus').textContent = `Loading page ${pageNum} of ${state.pdfJsDoc.numPages}…`;
-    // Allocate a fresh <canvas> per render to satisfy pdf.js's "no
-    // second render on a painted canvas" trap.
-    const old = pageSurface.querySelector('.sign-page-canvas');
-    if (old) old.remove();
-    const fresh = document.createElement('canvas');
-    fresh.className = 'sign-page-canvas';
-    pageSurface.insertBefore(fresh, marksLayer);
+  wirePad(root);
+  wireDrop(root);
+  wireHandles(root);
 
-    const page = await state.pdfJsDoc.getPage(pageNum);
-    const surfaceRect = pageSurface.getBoundingClientRect();
-    const maxW = Math.max(280, surfaceRect.width - 24);
-    const baseViewport = page.getViewport({ scale: 1 });
-    const fitScale = Math.min(2, maxW / baseViewport.width);
-    currentScale = fitScale;
-    const viewport = page.getViewport({ scale: fitScale });
-    currentViewport = viewport;
-    currentPageObj = page;
-
-    const dpr = window.devicePixelRatio || 1;
-    fresh.width = Math.round(viewport.width * dpr);
-    fresh.height = Math.round(viewport.height * dpr);
-    fresh.style.width = `${viewport.width}px`;
-    fresh.style.height = `${viewport.height}px`;
-    pageSurface.style.width = `${viewport.width}px`;
-    pageSurface.style.height = `${viewport.height}px`;
-
-    const ctx = fresh.getContext('2d');
-    ctx.scale(dpr, dpr);
-    await page.render({ canvasContext: ctx, viewport, canvas: fresh }).promise;
-
-    // Re-paint marks (the live mark model hasn't changed; just re-place
-    // them on the new viewport).
-    renderMarks();
-    pageToolbar.querySelector('#signPageStatus').textContent = `Page ${pageNum} of ${state.pdfJsDoc.numPages}. Drag a signature onto the page.`;
-  }
-
-  // Re-render marks when the page is re-rendered.
-  function renderMarks() {
-    clear(marksLayer);
-    for (const mark of state.marks) {
-      marksLayer.append(buildMarkEl(mark));
-    }
-  }
-
-  function addMark({ isCountersign = false } = {}) {
-    if (!state.pdfJsDoc) {
-      showToast('Pick a PDF first.', { error: true });
-      return;
-    }
-    if (!state.signatures.length) {
-      showToast('Save a signature first (or load a scan).', { error: true });
-      return;
-    }
-    const sig = state.signatures[0];
-    const mark = {
-      id: `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-      signatureId: sig.id,
-      xFrac: isCountersign ? 0.62 : 0.18,
-      yFrac: isCountersign ? 0.7 : 0.74,
-      wFrac: 0.22,
-      name: isCountersign ? '' : '',
-      title: '',
-      date: todayIso(),
-      isCountersign,
+  qa('[data-field]', root).forEach((node) => {
+    const handler = () => {
+      state.form[node.dataset.field] = node.type === 'number' ? Number(node.value) : node.value;
+      save();
+      // only a page change needs a new bitmap; sizes and captions are overlay maths
+      if (node.dataset.field.startsWith('page')) {
+        clampPages(root);
+        renderStage(root);
+      } else {
+        paintStageScale(root);
+      }
+      paintSeal(root);
     };
-    state.marks.push(mark);
-    state.activeMarkId = mark.id;
-    renderMarks();
-  }
+    node.addEventListener('input', handler);
+    node.addEventListener('change', handler);
+  });
 
-  function buildMarkEl(mark) {
-    const sig = state.signatures.find((s) => s.id === mark.signatureId) || state.signatures[0];
-    const el = h('div', {
-      class: `sign-mark${mark.isCountersign ? ' is-countersign' : ''}${state.activeMarkId === mark.id ? ' is-active' : ''}`,
-      'data-id': mark.id,
-    }, [
-      h('div', { class: 'sign-mark-handle sign-mark-move' }, [
-        h('img', { src: sig?.png, alt: 'signature', draggable: false }),
-        h('div', { class: 'sign-mark-line' }, [
-          h('input', {
-            type: 'text',
-            class: 'sign-mark-name',
-            value: mark.name,
-            placeholder: mark.isCountersign ? 'Countersign name' : 'Signatory name',
-            autocomplete: 'off',
-            spellcheck: 'false',
-          }),
-          h('div', { class: 'sign-mark-meta' }, [
-            h('input', {
-              type: 'text',
-              class: 'sign-mark-title',
-              value: mark.title,
-              placeholder: mark.isCountersign ? 'Their title' : 'Title',
-              autocomplete: 'off',
-              spellcheck: 'false',
-            }),
-            h('input', {
-              type: 'date',
-              class: 'sign-mark-date',
-              value: mark.date,
-            }),
-          ]),
-        ]),
-      ]),
-      h('div', { class: 'sign-mark-resize', 'aria-label': 'Resize' }),
-      h('button', { class: 'sign-mark-remove', type: 'button', 'aria-label': 'Remove mark', title: 'Remove' }, '×'),
-    ]);
-
-    // Position via fractions.
-    el.style.left = `${mark.xFrac * 100}%`;
-    el.style.top = `${mark.yFrac * 100}%`;
-    el.style.width = `${mark.wFrac * 100}%`;
-
-    wireMarkInteractions(el, mark);
-    return el;
-  }
-
-  function wireMarkInteractions(el, mark) {
-    const move = el.querySelector('.sign-mark-move');
-    const resize = el.querySelector('.sign-mark-resize');
-    const remove = el.querySelector('.sign-mark-remove');
-    const nameInput = el.querySelector('.sign-mark-name');
-    const titleInput = el.querySelector('.sign-mark-title');
-    const dateInput = el.querySelector('.sign-mark-date');
-
-    // Live-sync the text fields into the model.
-    nameInput.addEventListener('input', () => { mark.name = nameInput.value; });
-    titleInput.addEventListener('input', () => { mark.title = titleInput.value; });
-    dateInput.addEventListener('change', () => { mark.date = dateInput.value; });
-
-    remove.addEventListener('click', () => {
-      state.marks = state.marks.filter((m) => m.id !== mark.id);
-      if (state.activeMarkId === mark.id) state.activeMarkId = null;
-      renderMarks();
+  qa('[data-quick]', root).forEach((node) => {
+    node.addEventListener('click', () => quickPlace(node.dataset.quick, root));
+  });
+  qa('[data-pos]', root).forEach((node) => {
+    node.addEventListener('click', () => {
+      const [key, position] = node.dataset.pos.split(':');
+      snapTo(key, position, root);
+      qa(`[data-pos^="${key}:"]`, root).forEach((other) => other.classList.toggle('is-on', other === node));
     });
+  });
 
-    function selectMark() {
-      state.activeMarkId = mark.id;
-      // Re-render so the .is-active class moves.
-      renderMarks();
+  q('#sgPreviewPage', root)?.addEventListener('input', (event) => {
+    state.form.previewPage = Number(event.target.value) || 1;
+    save();
+    clampPages(root);
+    renderStage(root);
+  });
+  q('#sgFlatten', root)?.addEventListener('change', (event) => {
+    state.form.flatten = event.target.checked;
+    save();
+    paintSeal(root);
+  });
+  q('#sgRuleShadow', root)?.addEventListener('change', (event) => {
+    state.form.captionInk = event.target.checked ? '#6b7368' : '#16161a';
+    save();
+    renderStage(root);
+  });
+  q('#sgGoFinish', root)?.addEventListener('click', () => {
+    window.location.hash = '#/finish';
+  });
+  q('#sgSignGo', root)?.addEventListener('click', () => sign(root));
+  q('#sgUploadBtn', root)?.addEventListener('click', async () => {
+    const files = await pickFiles({ accept: 'image/*', multiple: true });
+    for (const file of files) await addImageMark(file, root);
+  });
+  q('#sgSaveMark', root)?.addEventListener('click', () => savePadMark(root));
+  q('#sgUndo', root)?.addEventListener('click', () => {
+    state.strokes.pop();
+    repaintPad(root);
+  });
+  q('#sgClearPad', root)?.addEventListener('click', () => {
+    state.strokes = [];
+    repaintPad(root);
+  });
+
+  state.onResize = () => {
+    sizePad(root);
+    renderStage(root);
+  };
+  window.addEventListener('resize', state.onResize);
+  // a signature must not be cropped just because the panel got narrower
+  if ('ResizeObserver' in window) {
+    const pad = q('#sgPad', root);
+    if (pad) {
+      state.observer = new window.ResizeObserver(() => sizePad(root));
+      state.observer.observe(pad);
     }
-
-    function dragStart(event) {
-      if (event.target.closest('input')) return;
-      event.preventDefault();
-      selectMark();
-      const startX = event.clientX;
-      const startY = event.clientY;
-      const startLeft = mark.xFrac;
-      const startTop = mark.yFrac;
-      const surface = pageSurface.getBoundingClientRect();
-      function onMove(e) {
-        const dx = (e.clientX - startX) / surface.width;
-        const dy = (e.clientY - startY) / surface.height;
-        mark.xFrac = clamp(startLeft + dx, 0, 1);
-        mark.yFrac = clamp(startTop + dy, 0, 1);
-        el.style.left = `${mark.xFrac * 100}%`;
-        el.style.top = `${mark.yFrac * 100}%`;
-        // Snap to corners when within 4% of an edge.
-        maybeSnapToCorner(mark);
-      }
-      function onUp() {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        el.style.left = `${mark.xFrac * 100}%`;
-        el.style.top = `${mark.yFrac * 100}%`;
-      }
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
-    }
-
-    function resizeStart(event) {
-      event.preventDefault();
-      event.stopPropagation();
-      selectMark();
-      const startX = event.clientX;
-      const startW = mark.wFrac;
-      const surface = pageSurface.getBoundingClientRect();
-      function onMove(e) {
-        const dx = (e.clientX - startX) / surface.width;
-        mark.wFrac = clamp(startW + dx, 0.05, 0.9);
-        el.style.width = `${mark.wFrac * 100}%`;
-      }
-      function onUp() {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-      }
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
-    }
-
-    move.addEventListener('pointerdown', dragStart);
-    resize.addEventListener('pointerdown', resizeStart);
-
-    // Arrow-key nudging when the mark is selected.
-    el.addEventListener('keydown', (event) => {
-      if (state.activeMarkId !== mark.id) return;
-      const step = event.shiftKey ? 0.02 : 0.005;
-      let used = false;
-      if (event.key === 'ArrowLeft') { mark.xFrac = clamp(mark.xFrac - step, 0, 1); used = true; }
-      if (event.key === 'ArrowRight') { mark.xFrac = clamp(mark.xFrac + step, 0, 1); used = true; }
-      if (event.key === 'ArrowUp') { mark.yFrac = clamp(mark.yFrac - step, 0, 1); used = true; }
-      if (event.key === 'ArrowDown') { mark.yFrac = clamp(mark.yFrac + step, 0, 1); used = true; }
-      if (used) {
-        event.preventDefault();
-        el.style.left = `${mark.xFrac * 100}%`;
-        el.style.top = `${mark.yFrac * 100}%`;
-        maybeSnapToCorner(mark);
-      }
-    });
   }
 
-  function maybeSnapToCorner(mark) {
-    const snap = 0.04;
-    if (mark.xFrac < snap) mark.xFrac = 0.04;
-    if (mark.xFrac > 1 - snap) mark.xFrac = 1 - snap;
-    if (mark.yFrac < snap) mark.yFrac = 0.04;
-    if (mark.yFrac > 1 - snap) mark.yFrac = 1 - snap;
-  }
+  paintSeal(root);
+}
 
-  // ------------------------------------------------------------------
-  // Saved signatures list (in localStorage)
-  // ------------------------------------------------------------------
-
-  function renderSignatureList() {
-    const list = panel.querySelector('#signList');
-    clear(list);
-    if (!state.signatures.length) {
-      list.append(h('p', { class: 'sign-list-empty' }, 'No saved signatures yet. Draw one above or load a scan.'));
-      return;
-    }
-    state.signatures.forEach((sig) => {
-      const row = h('div', { class: 'sign-list-row', 'data-id': sig.id }, [
-        h('img', { src: sig.png, alt: sig.label || 'Signature', class: 'sign-list-thumb' }),
-        h('div', { class: 'sign-list-meta' }, [
-          h('input', {
-            type: 'text',
-            class: 'sign-list-label',
-            value: sig.label || '',
-            placeholder: 'Untitled',
-            'data-id': sig.id,
-            autocomplete: 'off',
-            spellcheck: 'false',
-          }),
-          h('span', { class: 'sign-list-date' }, new Date(sig.createdAt).toLocaleDateString()),
-        ]),
-        h('div', { class: 'sign-list-row-actions' }, [
-          h('button', { class: 'button button-text', type: 'button', 'data-id': sig.id, 'data-act': 'use' }, 'Use'),
-          h('button', { class: 'button button-text', type: 'button', 'data-id': sig.id, 'data-act': 'delete' }, 'Delete'),
-        ]),
-      ]);
-      list.append(row);
-    });
-    // Wire row actions.
-    list.querySelectorAll('.sign-list-label').forEach((input) => {
-      input.addEventListener('change', (e) => {
-        const sig = state.signatures.find((s) => s.id === input.dataset.id);
-        if (sig) {
-          sig.label = e.target.value;
-          writePref(SIGNATURES_KEY, state.signatures);
-        }
-      });
-    });
-    list.querySelectorAll('button[data-act]').forEach((b) => {
-      b.addEventListener('click', () => {
-        const sig = state.signatures.find((s) => s.id === b.dataset.id);
-        if (!sig) return;
-        if (b.dataset.act === 'use') {
-          // Surface this signature on the pad (replace any current drawing).
-          replacePadWithSignature(sig);
-        } else if (b.dataset.act === 'delete') {
-          state.signatures = state.signatures.filter((s) => s.id !== sig.id);
-          writePref(SIGNATURES_KEY, state.signatures);
-          renderSignatureList();
-        }
-      });
-    });
-  }
-
-  function replacePadWithSignature(sig) {
-    // Re-rasterise the signature PNG at the current pad size and put
-    // it into the stroke list so the user can edit from there if they
-    // want. We approximate by setting padStrokes to a single "image"
-    // stroke that the redraw function detects.
-    padCtx.clearRect(0, 0, padW, padH);
-    const img = new Image();
-    img.onload = () => {
-      padCtx.drawImage(img, 12, 12, padW - 24, padH * 0.55);
-      padHint.style.opacity = '0';
-      padStatus.textContent = `Loaded "${sig.label || 'signature'}" from saved list. Draw to extend it, or save as a new one.`;
+/* ----------------------------------------------------------------- pad ---- */
+function wirePad(root) {
+  const canvas = q('#sgPad', root);
+  if (!canvas) return;
+  /* Strokes are kept as fractions of the pad box, not as pixels inside it. The
+     panel is a sidebar on a desktop and full width on a phone, and a phone
+     re-measures itself when the keyboard appears: pixel coordinates recorded at
+     one width land in the wrong place at another, which the customer sees as
+     their own signature drifting — and as a stretched mark, because the export
+     re-paints the same points. Fractions survive any resize. */
+  const box = () => ({ w: canvas.clientWidth || 520, h: canvas.clientHeight || PAD_HEIGHT });
+  const pointOf = (event) => {
+    const rect = canvas.getBoundingClientRect();
+    const { w, h } = box();
+    return {
+      x: (event.clientX - rect.left - canvas.clientLeft) / w,
+      y: (event.clientY - rect.top - canvas.clientTop) / h,
     };
-    img.src = sig.png;
-    padStrokes.length = 0;
-    liveStroke = null;
-  }
+  };
+  /* The nib is sized in screen pixels (a fast stroke tapers), so the distance
+     that feeds it has to be measured in pixels too, not in fractions. */
+  const widthAt = (previous, next) => {
+    const { w, h } = box();
+    if (!previous) return state.form.pen;
+    const distance = Math.hypot((next.x - previous.x) * w, (next.y - previous.y) * h);
+    const speed = Math.min(1, distance / 26);
+    return state.form.pen * (1 - 0.45 * speed);
+  };
+  const nib = (widthPx) => widthPx / box().w;
 
-  function loadScanAsSignature(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const label = file.name.replace(/\.[^.]+$/, '');
-    readFileDataURL(file).then((dataUrl) => {
-      knockOutWhiteBackground(dataUrl).then((png) => {
-        const sig = { id: `s-${Date.now().toString(36)}`, label, png, createdAt: Date.now() };
-        state.signatures.push(sig);
-        writePref(SIGNATURES_KEY, state.signatures);
-        renderSignatureList();
-        replacePadWithSignature(sig);
-        showToast(`Loaded "${label}".`);
-      });
-    }).catch(() => showToast('Could not read the image.', { error: true }));
-    event.target.value = '';
-  }
+  canvas.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    canvas.setPointerCapture?.(event.pointerId);
+    state.drawing = true;
+    const point = pointOf(event);
+    state.live = { ink: state.form.ink, points: [{ ...point, w: nib(widthAt(null, point)) }] };
+    state.strokes.push(state.live);
+    repaintPad(root);
+  });
+  canvas.addEventListener('pointermove', (event) => {
+    if (!state.drawing || !state.live) return;
+    const events = event.getCoalescedEvents?.() ?? [event];
+    const { w, h } = box();
+    let previous = state.live.points[state.live.points.length - 1];
+    for (const move of events) {
+      const point = pointOf(move);
+      if (Math.hypot((point.x - previous.x) * w, (point.y - previous.y) * h) < 0.8) continue;
+      const width = nib(widthAt(previous, point));
+      state.live.points.push({ ...point, w: (previous.w + width) / 2 });
+      previous = state.live.points[state.live.points.length - 1];
+    }
+    repaintPad(root);
+  });
+  const stop = () => {
+    if (!state.drawing) return;
+    state.drawing = false;
+    state.live = null;
+    const note = q('#sgPadNote', root);
+    if (note) note.textContent = state.strokes.length ? `${state.strokes.length} stroke${state.strokes.length === 1 ? '' : 's'} — save it when it looks like you.` : 'Draw on the pad.';
+  };
+  canvas.addEventListener('pointerup', stop);
+  canvas.addEventListener('pointercancel', stop);
+  /* No pointerleave: the pointer is captured, and a flourish that overshoots the
+     edge of the pad (or a page that scrolls under the pointer) should come back
+     rather than end the stroke mid-letter. */
+}
 
-  /**
-   * Knock out the white paper background of a scanned signature so it
-   * composites cleanly on any page. We do a flood-fill of "near
-   * white" pixels, replacing them with transparency.
-   */
-  async function knockOutWhiteBackground(dataUrl) {
-    const img = new Image();
-    await new Promise((resolve, reject) => {
-      img.onload = resolve;
-      img.onerror = reject;
-      img.src = dataUrl;
+function sizePad(root) {
+  const canvas = q('#sgPad', root);
+  if (!canvas || !canvas.clientWidth) return;
+  const ratio = window.devicePixelRatio || 1;
+  canvas.style.height = `${PAD_HEIGHT}px`;
+  // the bitmap has to cover the box inside the 1px frame, not the frame itself —
+  // a 2-pixel difference is a signature that is drawn slightly off the pen
+  const width = canvas.clientWidth || 520;
+  const height = canvas.clientHeight || PAD_HEIGHT;
+  if (canvas.width === Math.round(width * ratio) && canvas.height === Math.round(height * ratio)) return;
+  canvas.width = Math.round(width * ratio);
+  canvas.height = Math.round(height * ratio);
+  repaintPad(root);
+}
+
+/* Width and height are of the canvas being painted, so the same stroke looks
+   the same on the 1x pad and on the wide export canvas. */
+function paintPadStroke(context, stroke, width, height) {
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  context.strokeStyle = stroke.ink;
+  const points = stroke.points;
+  if (!points.length) return;
+  if (points.length === 1) {
+    context.fillStyle = stroke.ink;
+    context.beginPath();
+    context.arc(points[0].x * width, points[0].y * height, (points[0].w * width) / 2, 0, Math.PI * 2);
+    context.fill();
+    return;
+  }
+  for (let index = 1; index < points.length; index += 1) {
+    const from = points[index - 1];
+    const to = points[index];
+    context.beginPath();
+    context.lineWidth = Math.max(0.6, ((from.w + to.w) / 2) * width);
+    context.moveTo(from.x * width, from.y * height);
+    const next = points[index + 1];
+    if (next) context.quadraticCurveTo(to.x * width, to.y * height, ((to.x + next.x) / 2) * width, ((to.y + next.y) / 2) * height);
+    else context.lineTo(to.x * width, to.y * height);
+    context.stroke();
+  }
+}
+
+function repaintPad(root) {
+  const canvas = q('#sgPad', root);
+  if (!canvas) return;
+  const context = canvas.getContext('2d');
+  context.save();
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = '#fdfdf8';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  // the ruled line a signature normally sits on
+  context.strokeStyle = '#dfe3d8';
+  context.lineWidth = 1;
+  context.setLineDash([3, 4]);
+  context.beginPath();
+  context.moveTo(canvas.width * 0.06, canvas.height * 0.76);
+  context.lineTo(canvas.width * 0.94, canvas.height * 0.76);
+  context.stroke();
+  context.setLineDash([]);
+  for (const stroke of state.strokes) paintPadStroke(context, stroke, canvas.width, canvas.height);
+  context.restore();
+}
+
+/* ------------------------------------------------------------ exports ---- */
+/* The pad is drawn on screen in CSS pixels; the mark is re-rendered at a fixed
+   export width on a transparent canvas and cropped to its own ink. */
+function padMarkCanvas(root) {
+  const source = q('#sgPad', root);
+  if (!source || !state.strokes.length) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = PAD_EXPORT_WIDTH;
+  canvas.height = Math.round(PAD_EXPORT_WIDTH * ((source.clientHeight || PAD_HEIGHT) / (source.clientWidth || 520)));
+  const context = canvas.getContext('2d');
+  for (const stroke of state.strokes) paintPadStroke(context, stroke, canvas.width, canvas.height);
+  return trimCanvas(canvas);
+}
+
+/* Cut away the empty margin so a placed mark is the ink, not the canvas. */
+function trimCanvas(canvas) {
+  const context = canvas.getContext('2d');
+  const { width, height } = canvas;
+  const data = context.getImageData(0, 0, width, height).data;
+  let minX = width;
+  let minY = height;
+  let maxX = 0;
+  let maxY = 0;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (data[(y * width + x) * 4 + 3] < 12) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX <= minX || maxY <= minY) return canvas;
+  const pad = Math.round(Math.max(maxX - minX, maxY - minY) * 0.05) + 4;
+  const left = Math.max(0, minX - pad);
+  const top = Math.max(0, minY - pad);
+  const right = Math.min(width, maxX + pad + 1);
+  const bottom = Math.min(height, maxY + pad + 1);
+  const out = document.createElement('canvas');
+  out.width = right - left;
+  out.height = bottom - top;
+  out.getContext('2d').drawImage(canvas, left, top, out.width, out.height, 0, 0, out.width, out.height);
+  return out;
+}
+
+async function addImageMark(file, root) {
+  if (!/^image\//.test(file.type)) {
+    toast('Use a PNG or JPG of the signature.', true);
+    return;
+  }
+  try {
+    const url = URL.createObjectURL(file);
+    const image = await new Promise((resolve, reject) => {
+      const node = new Image();
+      node.onload = () => resolve(node);
+      node.onerror = () => reject(new Error('decode failed'));
+      node.src = url;
     });
+    const scale = Math.min(1, PAD_EXPORT_WIDTH / image.naturalWidth);
     const canvas = document.createElement('canvas');
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const px = data.data;
-    for (let i = 0; i < px.length; i += 4) {
-      const r = px[i], g = px[i + 1], b = px[i + 2];
-      // "Near white": any pixel where all three channels are > 230.
-      if (r > 230 && g > 230 && b > 230) {
-        px[i + 3] = 0;
+    canvas.width = Math.round(image.naturalWidth * scale);
+    canvas.height = Math.round(image.naturalHeight * scale);
+    const context = canvas.getContext('2d');
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const threshold = Number(state.form.knock) || 0;
+    if (threshold) {
+      const frame = context.getImageData(0, 0, canvas.width, canvas.height);
+      const bytesOf = frame.data;
+      for (let index = 0; index < bytesOf.length; index += 4) {
+        const light = (bytesOf[index] * 0.299 + bytesOf[index + 1] * 0.587 + bytesOf[index + 2] * 0.114) > threshold;
+        if (light) bytesOf[index + 3] = 0;
       }
+      context.putImageData(frame, 0, 0);
     }
-    ctx.putImageData(data, 0, 0);
-    return canvas.toDataURL('image/png');
+    const trimmed = trimCanvas(canvas);
+    URL.revokeObjectURL(url);
+    pushMark({
+      name: file.name.replace(/\.[a-z]+$/i, '').slice(0, 40) || 'Scanned signature',
+      dataUrl: trimmed.toDataURL('image/png'),
+      width: trimmed.width,
+      height: trimmed.height,
+    }, root);
+    toast(`${file.name} is on the pad — it never left this tab.`);
+  } catch (error) {
+    console.error(error);
+    toast('That image could not be read.', true);
   }
+}
 
-  async function saveCurrentPadAsSignature() {
-    if (!padStrokes.length && !padCanvasHasInk()) {
-      showToast('Draw something first.', { error: true });
-      return;
-    }
-    // Render the pad strokes (and any drawn PNG overlay from
-    // replacePadWithSignature) into a fresh canvas to get the PNG.
-    const exportCanvas = document.createElement('canvas');
-    exportCanvas.width = padCanvas.width;
-    exportCanvas.height = padCanvas.height;
-    const ctx = exportCanvas.getContext('2d');
-    ctx.drawImage(padCanvas, 0, 0);
-    const png = exportCanvas.toDataURL('image/png');
-    const label = (padLabelInput.value || '').trim() || `Signature ${state.signatures.length + 1}`;
-    const sig = { id: `s-${Date.now().toString(36)}`, label, png, createdAt: Date.now() };
-    state.signatures.push(sig);
-    writePref(SIGNATURES_KEY, state.signatures);
-    renderSignatureList();
-    padStatus.textContent = `Saved "${label}". Click "Use" on the list to switch the pad, or place it on a page.`;
-    showToast(`Saved "${label}".`);
+function pushMark(mark, root) {
+  const record = { id: `m${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, savedAt: Date.now(), ...mark };
+  state.marks = [...state.marks, record].slice(-12);
+  if (!writeMarks()) toast('Saved for this session — the browser refused to store it.', true);
+  if (!state.form.markA) state.form.markA = record.id;
+  else if (!state.form.markB) state.form.markB = record.id;
+  prefs.write(state.form);
+  rebuildPartySelects(root);
+  paintMarks(root);
+  paintSeal(root);
+  renderStage(root);
+  return record;
+}
+
+function writeMarks() {
+  return markStore.write({ marks: state.marks });
+}
+
+function savePadMark(root) {
+  const canvas = padMarkCanvas(root);
+  if (!canvas) return toast('Draw something first — the pad is empty.', true);
+  const input = q('#sgMarkName', root);
+  const name = (input?.value || '').trim() || `Signature ${state.marks.length + 1}`;
+  pushMark({ name, dataUrl: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height }, root);
+  if (input) input.value = '';
+  toast(`${name} kept on this device.`);
+}
+
+function rebuildPartySelects(root) {
+  qa('[data-field="markA"], [data-field="markB"]').forEach((node) => {
+    const current = node.value;
+    node.replaceChildren(
+      ...(state.marks.length
+        ? state.marks.map((mark) => new Option(mark.name, mark.id, false, mark.id === (current || state.form[node.dataset.field])))
+        : [new Option('Nothing saved yet', '', false, true)]),
+    );
+    if (state.marks.length) node.value = state.form[node.dataset.field] || state.marks[0].id;
+  });
+}
+
+function paintMarks(root) {
+  const list = q('#sgMarks', root);
+  const count = q('#sgMarkCount', root);
+  if (!list) return;
+  if (count) count.textContent = state.marks.length ? `${state.marks.length} on this device` : 'none yet';
+  if (!state.marks.length) {
+    list.replaceChildren(el('p', { class: 'sg-marks-empty', text: 'Nothing kept yet. Draw a signature above and press Keep it.' }));
+    return;
   }
+  if (!state.marks.some((mark) => mark.id === state.form.markA)) state.form.markA = state.marks[0].id;
+  if (!state.marks.some((mark) => mark.id === state.form.markB)) state.form.markB = state.marks[state.marks.length - 1].id;
+  rebuildPartySelects(root);
+  list.replaceChildren(
+    ...state.marks.map((mark) => {
+      const card = el('div', { class: 'sg-mark' });
+      card.append(
+        el('span', { class: 'sg-mark-thumb' }, [el('img', { src: mark.dataUrl, alt: '', loading: 'lazy' })]),
+        el('div', { class: 'sg-mark-body' }, [
+          el('input', {
+            class: 'text-input sg-mark-name',
+            value: mark.name,
+            'aria-label': 'Name of this signature',
+            onchange: (event) => {
+              mark.name = event.target.value.trim() || mark.name;
+              writeMarks();
+              rebuildPartySelects(root);
+              paintSeal(root);
+            },
+          }),
+          el('span', { class: 'sg-mark-size', text: `${mark.width}×${mark.height} px` }),
+        ]),
+        el('div', { class: 'sg-mark-actions' }, [
+          el('button', { class: 'button button-text', type: 'button', text: 'A', 'data-use': 'a', title: 'Use for your signature', onclick: () => useMark(mark, 'markA', root) }),
+          el('button', { class: 'button button-text', type: 'button', text: 'B', 'data-use': 'b', title: 'Use for the countersignature', onclick: () => useMark(mark, 'markB', root) }),
+          el('button', {
+            class: 'button button-text sg-mark-del',
+            type: 'button',
+            text: 'Remove',
+            onclick: () => {
+              state.marks = state.marks.filter((item) => item.id !== mark.id);
+              for (const key of ['markA', 'markB']) if (state.form[key] === mark.id) state.form[key] = state.marks[0]?.id ?? '';
+              writeMarks();
+              prefs.write(state.form);
+              paintMarks(root);
+              paintSeal(root);
+              renderStage(root);
+              toast('Removed from this browser.');
+            },
+          }),
+        ]),
+      );
+      return card;
+    }),
+  );
+}
 
-  function padCanvasHasInk() {
-    // Cheap test: see if any pixel is not fully transparent / paper.
-    if (!padCtx) return false;
-    const data = padCtx.getImageData(0, 0, padCanvas.width, padCanvas.height).data;
-    for (let i = 3; i < data.length; i += 400) {
-      if (data[i] > 0) return true;
+function useMark(mark, field, root) {
+  state.form[field] = mark.id;
+  prefs.write(state.form);
+  rebuildPartySelects(root);
+  paintMarks(root);
+  paintSeal(root);
+  renderStage(root);
+  toast(`${mark.name} → ${field === 'markA' ? 'your signature' : 'the countersignature'}.`);
+}
+
+/* ---------------------------------------------------------- the document ---- */
+function wireDrop(root) {
+  const zone = q('#sgDrop', root);
+  if (!zone) return;
+  zone.addEventListener('click', async () => {
+    const [file] = await pickFiles({ accept: 'application/pdf', multiple: false });
+    if (file) loadFile(file, root);
+  });
+  zone.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      zone.click();
     }
-    return false;
+  });
+  zone.addEventListener('dragover', (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    zone.classList.add('is-dragging');
+  });
+  zone.addEventListener('dragleave', () => zone.classList.remove('is-dragging'));
+  zone.addEventListener('drop', (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    zone.classList.remove('is-dragging');
+    const [file] = Array.from(event.dataTransfer?.files || []);
+    if (file) loadFile(file, root);
+    else toast('Drop a PDF file.', true);
+  });
+}
+
+async function loadFile(file, root) {
+  if (!/pdf$/i.test(file.type) && !/\.pdf$/i.test(file.name)) {
+    toast('That tab wants a PDF.', true);
+    return;
   }
-
-  // ------------------------------------------------------------------
-  // Save the signed PDF
-  // ------------------------------------------------------------------
-
-  async function saveSignedPdf() {
-    if (!state.pdfFile) {
-      showToast('Pick a PDF first.', { error: true });
-      return;
-    }
-    if (!state.marks.length) {
-      showToast('Place at least one signature on the page.', { error: true });
-      return;
-    }
-    const button = panel.querySelector('#signSavePdf');
-    setBusy(button, true, 'Saving…');
-    footStatus.textContent = 'Reading PDF…';
-    try {
-      const { PDFDocument, rgb, StandardFonts } = await loadPdfLib();
-      const bytes = await readFileBytes(state.pdfFile);
-      const source = await PDFDocument.load(bytes, { updateMetadata: false });
-      const font = await source.embedFont(StandardFonts.Helvetica);
-      const fontItalic = await source.embedFont(StandardFonts.HelveticaOblique);
-      const sigIndex = new Map(state.signatures.map((s) => [s.id, s]));
-
-      const targetPageIndex = state.pageIndex;
-      const targetPage = source.getPage(targetPageIndex);
-      const targetRotation = targetPage.getRotation().angle || 0;
-
-      // If the user asked for "flatten", rasterise the page first.
-      let workingDoc = source;
-      if (state.flatten) {
-        workingDoc = await flattenPage(source, targetPageIndex, state.pdfJsDoc);
-      }
-
-      const out = state.flatten ? workingDoc : source;
-      const page = out.getPage(state.flatten ? targetPageIndex : targetPageIndex);
-
-      // Compute the page size in *display* (CSS pixel) units. The
-      // surface renders at `currentScale` (CSS px per PDF pt) so the
-      // viewport tells us the page size in pixels.
-      const pageSize = page.getSize();
-      const displayW = currentViewport.width;
-      const displayH = currentViewport.height;
-
-      for (const mark of state.marks) {
-        const sig = sigIndex.get(mark.signatureId);
-        if (!sig) continue;
-        // The signature lives at mark.xFrac / mark.yFrac (top-left)
-        // and is mark.wFrac wide. The mark's vertical region is the
-        // image height plus the name/title/date block.
-        const sigDisplayW = mark.wFrac * displayW;
-        const sigDisplayH = sigDisplayW * 0.45; // 45% aspect for the ink area
-        const sigXDisplay = mark.xFrac * displayW;
-        const sigYDisplay = mark.yFrac * displayH;
-        // Map the top-left and bottom-right of the signature image
-        // into PDF user space. The /Rotate quadrant maths is in
-        // render.js's displayToPdf.
-        const topLeftPdf = displayToPdf({ x: sigXDisplay, y: sigYDisplay }, page, currentViewport);
-        const bottomRightPdf = displayToPdf({ x: sigXDisplay + sigDisplayW, y: sigYDisplay + sigDisplayH }, page, currentViewport);
-        const imgW = Math.abs(bottomRightPdf.x - topLeftPdf.x);
-        const imgH = Math.abs(bottomRightPdf.y - topLeftPdf.y);
-        const x = Math.min(topLeftPdf.x, bottomRightPdf.x);
-        const y = Math.min(topLeftPdf.y, bottomRightPdf.y);
-
-        const pngBytes = dataUrlToBytes(sig.png);
-        const embedded = await out.embedPng(pngBytes);
-        page.drawImage(embedded, { x, y, width: imgW, height: imgH });
-
-        // The name / title / date block sits under the signature.
-        // For non-flatten output, draw it with PDF standard fonts.
-        // For flattened output, the rasterised page already has a
-        // blank surface so the text would be invisible — skip it.
-        if (!state.flatten) {
-          const blockTopY = y - 22; // 22pt below the signature
-          drawMetaBlock(page, font, fontItalic, mark, { x: x, y: blockTopY }, targetRotation, rgb(0.14, 0.22, 0.18));
-        }
-      }
-
-      const outBytes = await out.save();
-      const baseName = state.pdfFile.name.replace(/\.pdf$/i, '') || 'document';
-      const suffix = state.flatten ? '-signed-flat.pdf' : '-signed.pdf';
-      downloadBlob(new Blob([outBytes], { type: 'application/pdf' }), `${baseName}${suffix}`);
-      footStatus.textContent = `Saved ${baseName}${suffix} (${formatBytes(outBytes.length)}).`;
-      showToast(`Saved ${baseName}${suffix}`);
-    } catch (error) {
-      console.error('Save failed:', error);
-      footStatus.textContent = error && error.message ? error.message : 'Could not save the PDF.';
-      showToast('Could not save the PDF.', { error: true });
-    } finally {
-      setBusy(button, false, 'Save signed PDF');
-    }
-  }
-
-  function drawMetaBlock(page, font, fontItalic, mark, topLeft, rotation, color) {
-    const lines = [];
-    if (mark.name) lines.push({ text: mark.name, font, size: 9 });
-    if (mark.title) lines.push({ text: mark.title, font: fontItalic, size: 8 });
-    if (mark.date) {
-      // Render the date in the user's locale, but fall back to the
-      // raw ISO value if it doesn't parse.
-      const d = new Date(mark.date);
-      const text = Number.isNaN(d.getTime()) ? mark.date : d.toLocaleDateString();
-      lines.push({ text: text, font, size: 8 });
-    }
-    let y = topLeft.y;
-    for (const line of lines) {
-      page.drawText(line.text, { x: topLeft.x, y, size: line.size, font: line.font, color });
-      y -= line.size + 2;
-    }
-  }
-
-  /**
-   * Rasterise a single page to a JPEG and replace it in the working
-   * PDFDocument with an image-only page of the same dimensions. The
-   * text layer is destroyed, so any signature drawn on top is
-   * "flattened" — it can't be lifted off the page.
-   */
-  async function flattenPage(source, pageIndex, sourcePdfJs) {
+  state.name = file.name;
+  state.buffer = await file.arrayBuffer();
+  root.classList.add('has-input');
+  try {
     const { PDFDocument } = await loadPdfLib();
-    const page = source.getPage(pageIndex);
-    const { width: pageW, height: pageH } = page.getSize();
-    const scale = 2; // 2× for crisp output
-    const jsPage = await sourcePdfJs.getPage(pageIndex + 1);
-    const viewport = jsPage.getViewport({ scale });
+    const doc = await PDFDocument.load(state.buffer.slice(0), { ignoreEncryption: true, updateMetadata: false });
+    state.pageCount = doc.getPageCount();
+    state.pageSizes = doc.getPages().map((page) => page.getSize());
+    state.rotations = doc.getPages().map((page) => (((page.getRotation().angle % 360) + 360) % 360));
+  } catch (error) {
+    console.error(error);
+    toast('This PDF could not be opened for writing.', true);
+    return;
+  }
+  state.form.previewPage = 1;
+  state.form.pageA = 1;
+  state.form.pageB = 1;
+  const node = q('#sgPreviewPage', root);
+  if (node) node.value = 1;
+  seedBlocks();
+  paintCard(root);
+  clampPages(root);
+  paintMode(root);
+  paintSeal(root);
+}
+
+function seedBlocks() {
+  for (const key of ['a', 'b']) {
+    const margin = 64;
+    const width = Number(state.form[key === 'a' ? 'widthA' : 'widthB']) || 120;
+    const size = displaySize(state.form.previewPage - 1);
+    const mark = markFor(key);
+    const height = mark ? (width * mark.height) / mark.width : 56;
+    blocks[key].x = key === 'a' ? margin : Math.max(margin, size.width - margin - width);
+    blocks[key].y = Math.max(margin, size.height - margin - height - 30);
+  }
+}
+
+function markFor(key) {
+  const id = state.form[key === 'a' ? 'markA' : 'markB'];
+  return state.marks.find((mark) => mark.id === id) ?? null;
+}
+
+function displaySize(pageIndex) {
+  const size = state.pageSizes[pageIndex] ?? { width: 595, height: 842 };
+  const rot = state.rotations[pageIndex] ?? 0;
+  return rot === 90 || rot === 270 ? { width: size.height, height: size.width } : size;
+}
+
+function clampPages(root) {
+  if (!state.pageCount) return;
+  for (const key of ['previewPage', 'pageA', 'pageB']) {
+    const value = Math.min(state.pageCount, Math.max(1, Math.round(Number(state.form[key]) || 1)));
+    state.form[key] = value;
+  }
+  for (const [field, form] of [['#sgPreviewPage', 'previewPage'], ['[data-field="pageA"]', 'pageA'], ['[data-field="pageB"]', 'pageB']]) {
+    const node = q(field, root);
+    if (node) node.value = state.form[form];
+  }
+}
+
+function blockHeight(key) {
+  const mark = markFor(key);
+  const width = Number(state.form[key === 'a' ? 'widthA' : 'widthB']) || 120;
+  const markHeight = mark ? (width * mark.height) / mark.width : 0.62 * width;
+  const rule = state.form[key === 'a' ? 'ruleA' : 'ruleB'];
+  const name = (state.form[key === 'a' ? 'nameA' : 'nameB'] || (rule === 'none' ? '' : mark?.name) || '').trim();
+  const title = (state.form[key === 'a' ? 'titleA' : 'titleB'] || '').trim();
+  return markHeight + (rule === 'none' ? 0 : 8) + (name ? 11 : 0) + (title ? 9.5 : 0) + 2;
+}
+
+function snapTo(key, position, root) {
+  const size = displaySize(state.form.previewPage - 1);
+  const width = Number(state.form[key === 'a' ? 'widthA' : 'widthB']) || 120;
+  const height = blockHeight(key);
+  const margin = 56;
+  blocks[key].x = position.includes('right') ? size.width - margin - width : position.includes('left') ? margin : (size.width - width) / 2;
+  blocks[key].y = position.includes('top') ? margin : position.includes('middle') ? (size.height - height) / 2 : size.height - margin - height;
+  renderStage(root);
+  paintSeal(root);
+}
+
+function quickPlace(what, root) {
+  if (!state.buffer) return toast('Open a PDF first.', true);
+  const size = displaySize(state.form.previewPage - 1);
+  const widthA = Number(state.form.widthA) || 132;
+  const widthB = Number(state.form.widthB) || 116;
+  if (what === 'side') {
+    const gap = 40;
+    const total = widthA + gap + widthB;
+    const left = Math.max(40, (size.width - total) / 2);
+    const top = size.height - Math.max(blockHeight('a'), blockHeight('b')) - 72;
+    blocks.a.x = left;
+    blocks.b.x = left + widthA + gap;
+    blocks.a.y = blocks.b.y = Math.max(40, top);
+    state.form.pageB = state.form.previewPage;
+  } else if (what === 'below') {
+    const left = Math.max(48, size.width * 0.12);
+    blocks.a.x = left;
+    blocks.b.x = left;
+    blocks.a.y = size.height - blockHeight('a') - 84;
+    blocks.b.y = blocks.a.y + blockHeight('a') + 46;
+    state.form.pageB = state.form.previewPage;
+  } else {
+    state.form.pageB = state.form.previewPage;
+  }
+  clampPages(root);
+  renderStage(root);
+  paintSeal(root);
+  toast('Placed — nudge it with the arrow keys if the line is fussy.');
+}
+
+/* -------------------------------------------------------------- preview ---- */
+/* Preview renders are queued: two feeds in quick notice (or a resize during a
+   drop) used to leave a cleared canvas behind, because each render reset the
+   canvas size before bailing out when a newer one took over. */
+let stageChain = Promise.resolve();
+function renderStage(root) {
+  stageChain = stageChain.then(() => renderStageNow(root)).catch((error) => {
+    console.error('Sign preview could not be drawn:', error);
+  });
+  return stageChain;
+}
+
+/* pdf.js refuses a second render task on a canvas element it has already been
+   asked to paint, so each repaint swaps in a fresh one — loading a second
+   document into this tab used to leave the preview blank. */
+function takeCanvas(root) {
+  const holder = q('#sgPaper', root);
+  if (!holder) return null;
+  const previous = q('#sgCanvas', root);
+  const canvas = el('canvas', {
+    id: 'sgCanvas',
+    'aria-label': previous?.getAttribute('aria-label') ?? 'The page you are signing, with the signature blocks on it',
+  });
+  if (previous) previous.replaceWith(canvas);
+  else holder.prepend(canvas);
+  return canvas;
+}
+
+async function renderStageNow(root) {
+  const stage = q('#sgStage', root);
+  // while an export is running pdf.js is rasterising pages itself, so the
+  // preview waits for its turn instead of colliding with it
+  if (!stage || !state.buffer || state.busy) return;
+  const canvas = takeCanvas(root);
+  if (!canvas) return;
+  const index = Math.max(0, Math.min(state.pageCount - 1, (Number(state.form.previewPage) || 1) - 1));
+  const pdfjs = await loadPdfJs();
+  const doc = await pdfjs.getDocument({ data: state.buffer.slice(0), isEvalSupported: false }).promise;
+  const page = await doc.getPage(index + 1);
+  const base = page.getViewport({ scale: 1 });
+  // render at the size the canvas is actually shown, so the bitmap is never upscaled
+  const cssWidth = canvas.clientWidth || Math.min(460, stage.clientWidth - 24) || 460;
+  const scale = Math.min(2.4, cssWidth / base.width);
+  const viewport = page.getViewport({ scale });
+  canvas.width = Math.round(viewport.width);
+  canvas.height = Math.round(viewport.height);
+  const context = canvas.getContext('2d');
+  await page.render({ canvasContext: context, viewport }).promise;
+  state.render = { viewport, base, index };
+  page.cleanup();
+  await doc.destroy();
+  paintStageScale(root);
+}
+
+function paintStageScale(root) {
+  const base = state.render?.base;
+  if (!base) return;
+  for (const key of ['a', 'b']) {
+    const handle = q(`.sg-handle[data-handle="${key}"]`, root);
+    if (!handle) continue;
+    const mark = markFor(key);
+    const onThisPage = state.form[key === 'a' ? 'pageA' : 'pageB'] === state.form.previewPage;
+    handle.hidden = !onThisPage || !mark;
+    if (handle.hidden) continue;
+    // everything is a share of the page box, so the overlay follows the render
+    const width = Number(state.form[key === 'a' ? 'widthA' : 'widthB']) || 120;
+    const height = mark ? (width * mark.height) / mark.width : 0.6 * width;
+    handle.style.left = `${(blocks[key].x / base.width) * 100}%`;
+    handle.style.top = `${(blocks[key].y / base.height) * 100}%`;
+    handle.style.width = `${(width / base.width) * 100}%`;
+    handle.style.height = `${(height / base.height) * 100}%`;
+    handle.setAttribute('aria-label', `${PARTY[key].title} on page ${state.form[key === 'a' ? 'pageA' : 'pageB']}, ${Math.round(blocks[key].x)} by ${Math.round(blocks[key].y)} points from the top left — drag or arrow keys to move`);
+    const image = handle.querySelector('img');
+    if (image && mark && image.src !== mark.dataUrl) image.src = mark.dataUrl;
+  }
+  const hint = q('#sgStageHint', root);
+  if (hint) {
+    const off = ['a', 'b'].filter((key) => state.form[key === 'a' ? 'pageA' : 'pageB'] !== state.form.previewPage).map((key) => `${PARTY[key].short} is on page ${state.form[key === 'a' ? 'pageA' : 'pageB']}`);
+    hint.textContent = off.length ? `${off.join(' · ')} — change “Preview page” to see it.` : 'Drag a mark to move it. Arrow keys nudge, Shift + arrows move further.';
+  }
+}
+
+function wireHandles(root) {
+  const stage = q('#sgStage', root);
+  if (!stage) return;
+  qa('.sg-handle', stage).forEach((handle) => {
+    const key = handle.dataset.handle;
+    let start = null;
+    handle.addEventListener('pointerdown', (event) => {
+      const base = state.render?.base;
+      const rect = handle.parentElement?.getBoundingClientRect();
+      const scale = base && rect?.width ? rect.width / base.width : 0;
+      if (!scale) return;
+      event.preventDefault();
+      handle.setPointerCapture?.(event.pointerId);
+      start = { x: event.clientX, y: event.clientY, bx: blocks[key].x, by: blocks[key].y, scale };
+    });
+    handle.addEventListener('pointermove', (event) => {
+      if (!start) return;
+      const size = displaySize(state.form.previewPage - 1);
+      const width = Number(state.form[key === 'a' ? 'widthA' : 'widthB']) || 120;
+      const height = blockHeight(key);
+      blocks[key].x = Math.min(size.width - width, Math.max(0, start.bx + (event.clientX - start.x) / start.scale));
+      blocks[key].y = Math.min(size.height - height, Math.max(0, start.by + (event.clientY - start.y) / start.scale));
+      paintStageScale(root);
+    });
+    const end = () => {
+      if (!start) return;
+      start = null;
+      paintSeal(root);
+    };
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+    handle.addEventListener('keydown', (event) => {
+      const step = event.shiftKey ? 10 : 1;
+      const moves = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+      const move = moves[event.key];
+      if (!move) return;
+      event.preventDefault();
+      blocks[key].x += move[0] * step;
+      blocks[key].y += move[1] * step;
+      paintStageScale(root);
+      paintSeal(root);
+    });
+  });
+}
+
+/* --------------------------------------------------------------- sealing ---- */
+function paintCard(root) {
+  const card = q('#sgCard', root);
+  if (!card) return;
+  if (!state.buffer) {
+    card.replaceChildren(el('p', { class: 'sg-marks-empty', text: 'No document open. The pad works anyway — your marks are kept whether or not a PDF is loaded.' }));
+    const stat = q('#sgStat', root);
+    if (stat) stat.textContent = 'no file';
+    return;
+  }
+  card.replaceChildren(
+    el('div', { class: 'sg-card-row' }, [
+      el('div', { class: 'sg-card-name', text: state.name, title: state.name }),
+      el('a', { class: 'button button-light', href: '#', text: 'Replace', onclick: (event) => { event.preventDefault(); q('#sgDrop', root)?.click(); } }),
+    ]),
+    el('div', { class: 'sg-chip-row' }, [
+      el('span', { class: 'sg-chip', text: `${state.pageCount} ${state.pageCount === 1 ? 'page' : 'pages'}` }),
+      el('span', { class: 'sg-chip', text: `${state.marks.length} saved mark${state.marks.length === 1 ? '' : 's'}` }),
+      el('span', { class: 'sg-chip', text: state.form.flatten ? 'pages will be flattened' : 'text layer kept' }),
+    ]),
+  );
+  const stat = q('#sgStat', root);
+  if (stat) stat.textContent = `${state.pageCount} ${state.pageCount === 1 ? 'page' : 'pages'} · ${state.marks.length} saved ${state.marks.length === 1 ? 'mark' : 'marks'}`;
+}
+
+function paintSeal(root) {
+  paintCard(root);
+  const box = q('#sgSummary', root);
+  const hint = q('#sgSealHint', root);
+  const lines = ['a', 'b'].map((key) => {
+    const mark = markFor(key);
+    const page = state.form[key === 'a' ? 'pageA' : 'pageB'];
+    const width = Math.round(Number(state.form[key === 'a' ? 'widthA' : 'widthB']) || 120);
+    const name = (state.form[key === 'a' ? 'nameA' : 'nameB'] || '').trim();
+    const title = (state.form[key === 'a' ? 'titleA' : 'titleB'] || '').trim();
+    const rule = state.form[key === 'a' ? 'ruleA' : 'ruleB'];
+    const date = state.form[key === 'a' ? 'dateA' : 'dateB'];
+    return { key, mark, page, width, name, title, rule, date, x: Math.round(blocks[key].x), y: Math.round(blocks[key].y) };
+  });
+  if (box) {
+    box.replaceChildren(
+      ...lines.map((line) =>
+        el('div', { class: `sg-summary-row${line.mark ? '' : ' is-empty'}` }, [
+          el('span', { class: 'sg-summary-who', text: PARTY[line.key].title }),
+          el('span', { class: 'sg-summary-mark', text: line.mark ? line.mark.name : 'nothing chosen' }),
+          el('span', { class: 'sg-summary-where', text: line.mark ? `page ${line.page} · ${line.width}pt wide · ${line.x}×${line.y} pt from the top left` : 'add a mark in the pad panel' }),
+          el('span', { class: 'sg-summary-under', text: [line.name || (line.rule !== 'none' ? 'the mark’s own name' : ''), line.title, line.date !== 'none' ? (line.date === 'beside' ? 'date at the right' : 'date under') : ''].filter(Boolean).join(' · ') || 'no caption' }),
+        ]),
+      ),
+    );
+  }
+  if (hint) {
+    if (!state.buffer) hint.textContent = 'No document open.';
+    else {
+      const count = lines.filter((line) => line.mark).length;
+      hint.textContent = `${count} signature${count === 1 ? '' : 's'} will be drawn${state.form.flatten ? ' on flattened pages' : ''}.`;
+    }
+  }
+  const button = q('#sgSignGo', root);
+  if (button) button.disabled = !state.buffer || !lines.some((line) => line.mark);
+}
+
+function dateText() {
+  return new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+async function sign(root) {
+  if (!state.buffer) return toast('Open a PDF first.', true);
+  const plans = ['a', 'b']
+    .map((key) => {
+      const mark = markFor(key);
+      if (!mark) return null;
+      return { key, mark, page: Math.max(1, Math.min(state.pageCount, state.form[key === 'a' ? 'pageA' : 'pageB'])), width: Number(state.form[key === 'a' ? 'widthA' : 'widthB']) || 120 };
+    })
+    .filter(Boolean);
+  if (!plans.length) return toast('Choose a signature for at least one side.', true);
+
+  await withBusy(root, '#sgSignGo', state.form.flatten ? 'Flattening and signing…' : 'Signing…', async () => {
+    const signed = await drawSignatures(plans);
+    const out = state.form.flatten ? await flattenPages(signed, [...new Set(plans.map((plan) => plan.page - 1))]) : signed;
+    downloadBlob(new Blob([out], { type: 'application/pdf' }), `${state.name.replace(/\.pdf$/i, '')}-signed.pdf`);
+    toast(`${plans.length} signature${plans.length === 1 ? '' : 's'} drawn${state.form.flatten ? ' into the page image' : ''}. The file is in your downloads.`);
+  });
+}
+
+async function drawSignatures(plans) {
+  const { PDFDocument, StandardFonts, rgb, degrees } = await loadPdfLib();
+  const doc = await PDFDocument.load(state.buffer.slice(0), { ignoreEncryption: true, updateMetadata: false });
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  for (const plan of plans) {
+    const page = doc.getPage(plan.page - 1);
+    const image = await doc.embedPng(await dataUrlToBytes(plan.mark.dataUrl));
+    const size = page.getSize();
+    const rot = ((page.getRotation().angle % 360) + 360) % 360;
+    const display = rot === 90 || rot === 270 ? { width: size.height, height: size.width } : size;
+    const key = plan.key;
+    const height = (plan.width * image.height) / image.width;
+    const frame = { width: size.width, height: size.height, rot };
+    const draw = (dx, dyUp, op) => op(page, displayToPdf(dx, dyUp, frame), rot);
+    const drawText = (dx, dyUp, text, options) => {
+      const anchor = displayToPdf(dx, dyUp, frame);
+      page.drawText(text, { ...options, x: anchor.x, y: anchor.y, rotate: degrees(rot) });
+    };
+    const ink = hexToRgb(state.form.textInk);
+    const captionInk = hexToRgb(state.form.captionInk);
+    const blockTop = blocks[key].y;
+    const markBottom = display.height - blockTop - height;
+
+    draw(blocks[key].x, markBottom, (target, anchor, angle) => target.drawImage(image, {
+      x: anchor.x,
+      y: anchor.y,
+      width: plan.width,
+      height,
+      rotate: degrees(angle),
+    }));
+
+    const rule = state.form[key === 'a' ? 'ruleA' : 'ruleB'];
+    let cursor = markBottom - 6;
+    if (rule !== 'none') {
+      const start = displayToPdf(blocks[key].x, cursor, frame);
+      const end = displayToPdf(blocks[key].x + plan.width, cursor, frame);
+      drawRule(page, rgb, start, end, ink, rule);
+      cursor -= 5;
+    }
+    const name = (state.form[key === 'a' ? 'nameA' : 'nameB'] || (rule === 'none' ? '' : plan.mark.name) || '').trim();
+    const title = (state.form[key === 'a' ? 'titleA' : 'titleB'] || '').trim();
+    const date = state.form[key === 'a' ? 'dateA' : 'dateB'];
+    const captionSize = Number(state.form.captionSize) || 8.5;
+    if (name) {
+      drawText(blocks[key].x, cursor - captionSize, name, { size: captionSize, font: bold, color: rgb(...captionInk) });
+      if (date === 'beside') {
+        const text = dateText();
+        const offset = Math.max(0, plan.width - font.widthOfTextAtSize(text, captionSize));
+        drawText(blocks[key].x + offset, cursor - captionSize, text, { size: captionSize, font, color: rgb(...captionInk) });
+      }
+      cursor -= captionSize + 3;
+    }
+    if (title) {
+      drawText(blocks[key].x, cursor - (captionSize - 1), title, { size: captionSize - 1, font, color: rgb(...captionInk) });
+      cursor -= captionSize + 2;
+    }
+    if (date === 'today' && !name && !title) {
+      drawText(blocks[key].x, cursor - captionSize, dateText(), { size: captionSize, font, color: rgb(...captionInk) });
+    }
+  }
+  return doc.save({ useObjectStreams: false });
+}
+
+function drawRule(page, rgbOf, start, end, ink, rule) {
+  page.drawLine({
+    start,
+    end,
+    thickness: 0.7,
+    color: rgbOf(...ink),
+    dashArray: rule === 'dotted' ? [1.6, 1.8] : [],
+  });
+}
+
+/* display-space bottom-left → PDF user space, for the four /Rotate quadrants. */
+function displayToPdf(dx, dyUp, { width, height, rot }) {
+  if (rot === 90) return { x: width - dyUp, y: dx };
+  if (rot === 180) return { x: width - dx, y: height - dyUp };
+  if (rot === 270) return { x: dyUp, y: height - dx };
+  return { x: dx, y: dyUp };
+}
+
+async function flattenPages(pdfBytes, pageIndexes) {
+  const { PDFDocument, degrees } = await loadPdfLib();
+  const pdfjs = await loadPdfJs();
+  const src = await PDFDocument.load(pdfBytes, { ignoreEncryption: true, updateMetadata: false });
+  const view = await pdfjs.getDocument({ data: pdfBytes.slice(0), isEvalSupported: false }).promise;
+  const flat = new Set(pageIndexes);
+  const out = await PDFDocument.create();
+  for (const [get, set] of [['getTitle', 'setTitle'], ['getAuthor', 'setAuthor'], ['getSubject', 'setSubject'], ['getCreator', 'setCreator'], ['getProducer', 'setProducer']]) {
+    const value = src[get]();
+    if (value) out[set](value);
+  }
+  for (let index = 0; index < src.getPageCount(); index += 1) {
+    if (!flat.has(index)) {
+      const [copied] = await out.copyPages(src, [index]);
+      out.addPage(copied);
+      continue;
+    }
+    const page = await view.getPage(index + 1);
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(3, Math.max(2, 1600 / base.width));
+    const viewport = page.getViewport({ scale });
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(viewport.width);
     canvas.height = Math.round(viewport.height);
-    const ctx = canvas.getContext('2d');
-    await jsPage.render({ canvasContext: ctx, viewport, canvas }).promise;
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
-    const jpeg = new Uint8Array(await blob.arrayBuffer());
-
-    const out = await PDFDocument.create();
-    const image = await out.embedJpg(jpeg);
-    // Copy every OTHER page (not the one being flattened) so we can
-    // splice the flattened page back in at the right index.
-    const otherIndices = Array.from({ length: source.getPageCount() }, (_, i) => i).filter((i) => i !== pageIndex);
-    const others = await out.copyPages(source, otherIndices);
-    // Build the output in the right order: pages before, flattened page, pages after.
-    const beforeCount = pageIndex;
-    const before = others.slice(0, beforeCount);
-    const after = others.slice(beforeCount);
-    for (const p of before) out.addPage(p);
-    const newPage = out.addPage([pageW, pageH]);
-    newPage.drawImage(image, { x: 0, y: 0, width: pageW, height: pageH });
-    for (const p of after) out.addPage(p);
-    return out;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: context, viewport }).promise;
+    const raw = await dataUrlToBytes(canvas.toDataURL('image/jpeg', 0.92));
+    const image = await out.embedJpg(raw);
+    const size = src.getPage(index).getSize();
+    const newPage = out.addPage([size.width, size.height]);
+    const pageRotation = src.getPage(index).getRotation().angle;
+    if (pageRotation) newPage.setRotation(degrees(pageRotation));
+    newPage.drawImage(image, { x: 0, y: 0, width: size.width, height: size.height });
+    page.cleanup();
   }
+  await view.destroy();
+  return out.save({ useObjectStreams: false });
+}
 
-  function dataUrlToBytes(dataUrl) {
-    const base64 = dataUrl.split(',')[1] || '';
-    const bin = atob(base64);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
-    return out;
-  }
+async function dataUrlToBytes(dataUrl) {
+  const binary = atob(String(dataUrl).split(',')[1] ?? '');
+  const raw = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) raw[index] = binary.charCodeAt(index);
+  return raw;
+}
 
-  function setBusy(button, busy, label) {
-    if (!button) return;
-    button.disabled = !!busy;
-    if (busy) {
-      button.innerHTML = '<span class="export-spinner" aria-hidden="true"></span><span>' + label + '</span>';
-    } else {
-      button.innerHTML = '';
-      button.append(downloadIcon());
-      const span = document.createElement('span');
-      span.textContent = label;
-      button.append(span);
-    }
-  }
+function hexToRgb(hex) {
+  const clean = String(hex || '#000').replace('#', '');
+  const full = clean.length === 3 ? clean.split('').map((c) => c + c).join('') : clean.padEnd(6, '0').slice(0, 6);
+  return [0, 2, 4].map((i) => Number.parseInt(full.slice(i, i + 2), 16) / 255);
+}
 
-  function todayIso() {
-    const d = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  }
-
-  // ------------------------------------------------------------------
-  // Initial paint
-  // ------------------------------------------------------------------
-
-  renderSignatureList();
-  // Expose a tiny test hook so the user can drop a signature on the
-  // page from the saved list without first having to pick a PDF.
-  // (When they do pick a PDF, the marks layer is repainted anyway.)
-  panel.addEventListener('click', (e) => {
-    if (e.target.closest('[data-act="use"]')) {
-      const sig = state.signatures.find((s) => s.id === e.target.dataset.id);
-      if (sig && state.pdfJsDoc) {
-        // Auto-place the signature on the page so the user can drag.
-        const mark = {
-          id: `m-${Date.now().toString(36)}`,
-          signatureId: sig.id,
-          xFrac: 0.5,
-          yFrac: 0.78,
-          wFrac: 0.28,
-          name: '',
-          title: '',
-          date: todayIso(),
-          isCountersign: state.marks.length > 0,
-        };
-        state.marks.push(mark);
-        state.activeMarkId = mark.id;
-        renderMarks();
-      }
-    }
+/* -------------------------------------------------------------- modes ---- */
+function paintMode(root) {
+  const shell = q('#sgShell', root);
+  if (shell) shell.dataset.mode = state.mode;
+  qa('[data-mode-btn]', root).forEach((node) => {
+    const on = node.dataset.modeBtn === state.mode;
+    node.classList.toggle('is-on', on);
+    node.setAttribute('aria-pressed', String(on));
   });
-
-  return {
-    unmount() {
-      window.removeEventListener('resize', resizePad);
-      panel.remove();
-    },
-  };
+  qa('[data-sg-panel]', root).forEach((panel) => {
+    panel.hidden = panel.dataset.sgPanel !== state.mode;
+  });
+  const work = q('#sgWork', root);
+  const off = q('#sgNoFile', root);
+  if (work) work.hidden = !state.buffer;
+  if (off) off.hidden = Boolean(state.buffer);
+  if (state.mode === 'pad') requestAnimationFrame(() => sizePad(root));
+  if (state.mode === 'place') requestAnimationFrame(() => { paintStageScale(root); renderStage(root); });
+  if (state.buffer) paintCard(root);
+  paintSeal(root);
 }
 
-// ---------------------------------------------------------------------------
-// Icons
-// ---------------------------------------------------------------------------
-
-function checkIcon() {
-  return h('svg', { viewBox: '0 0 20 20', 'aria-hidden': 'true', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
-    h('path', { d: 'm4 10 3.5 3.5L16 5' })
-  );
-}
-
-function downloadIcon() {
-  return h('svg', { viewBox: '0 0 20 20', 'aria-hidden': 'true', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
-    h('path', { d: 'M10 3.5v8m0 0 3-3m-3 3-3-3M4.5 12.5v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3' })
-  );
-}
-
-function plusIcon() {
-  return h('svg', { viewBox: '0 0 20 20', 'aria-hidden': 'true', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
-    h('path', { d: 'M10 4.5v11M4.5 10h11' })
-  );
-}
-
-function pageIcon() {
-  return h('svg', { viewBox: '0 0 20 20', 'aria-hidden': 'true', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
-    h('path', { d: 'M5.5 3.5h9V16.5h-9zM8 7h4M8 10h4M8 13h2.5' })
-  );
+async function withBusy(root, id, label, work) {
+  const button = q(id, root);
+  if (!button || state.busy) return;
+  state.busy = true;
+  const original = button.innerHTML;
+  button.disabled = true;
+  button.classList.add('is-busy');
+  button.innerHTML = `<span class="export-spinner" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
+  try {
+    await work();
+  } catch (error) {
+    console.error(error);
+    toast(error?.message || 'That did not work — the message is in the console.', true);
+  } finally {
+    state.busy = false;
+    button.innerHTML = original;
+    button.classList.remove('is-busy');
+    renderStage(root);
+    paintSeal(root);
+  }
 }

@@ -2,10 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#f6f5f0" />
-    <meta name="description" content="A small, private, browser-based document studio. Write Markdown, edit PDFs, sign, translate, finish, and export — all without leaving your browser." />
-    <title>Folio — A small document studio</title>
+    <meta name="description" content="Folio — a quiet suite of browser tools: Markdown to PDF, merge and split PDFs, translate a PDF live, convert photos and pages, and turn your photographs into a printed-looking portfolio." />
+    <title>Folio — Markdown to PDF, beautifully</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
@@ -23,13 +23,14 @@
           </span>
           <span class="brand-word">folio<span>.</span></span>
           <span class="brand-divider" aria-hidden="true"></span>
-          <span class="brand-caption">DOCUMENT STUDIO</span>
+          <span class="brand-caption">A BROWSER DOC STUDIO</span>
         </a>
         <div class="header-right">
           <a class="header-link" href="#how-it-works">How it works</a>
+          <a class="header-link" href="#more-tools">More tools</a>
           <span class="privacy-indicator">
             <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.25" y="8.5" width="11.5" height="8.25" rx="2" /><path d="M6.75 8.5V6.25a3.25 3.25 0 0 1 6.5 0V8.5" /><path d="M10 11.6v2.1" /></svg>
-            Files stay on your device
+            <span>Files stay on your device</span>
           </span>
         </div>
       </header>
@@ -37,9 +38,9 @@
       <main id="top">
         <section class="intro" aria-labelledby="page-title">
           <div class="intro-copy">
-            <div class="eyebrow"><span class="eyebrow-dot"></span> A LITTLE MORE POLISHED</div>
-            <h1 id="page-title">Markdown, PDFs, and<br /><em>the rest of the desk.</em></h1>
-            <p>A small browser-based document studio: write Markdown, stitch PDFs, sign a page, translate a document, finish it with metadata and checksums, then export. Your files never leave the device.</p>
+            <div class="eyebrow"><span class="eyebrow-dot"></span><span class="eyebrow-text">Five tools, one page</span></div>
+            <h1 id="page-title">Markdown, meet<br /><em>your best side.</em></h1>
+            <p>Write a document, wrangle a PDF, translate a page, convert a stack of photos, or lay out a portfolio — all in this tab, with nothing uploaded.</p>
           </div>
           <div class="intro-note" aria-label="Private by design">
             <span class="note-icon" aria-hidden="true">
@@ -49,43 +50,258 @@
           </div>
         </section>
 
-        <section class="studio" id="workspace" aria-labelledby="workspace-title">
-          <div class="studio-heading">
-            <div>
-              <p class="section-kicker">THE WORKSPACE</p>
-              <h2 id="workspace-title">Make it yours<span>.</span></h2>
+        <nav class="tool-nav" id="toolNav" aria-label="Folio tools">
+          <div class="tool-nav-scroll">
+            <div class="tool-tablist" role="tablist" aria-label="Folio tools">
+              <button class="tool-tab is-active" type="button" role="tab" id="tab-markdown" aria-controls="panel-markdown" aria-selected="true" tabindex="0" data-tool="markdown">
+                <span class="tool-tab-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4.5h10v11H5z"/><path d="M7.4 12.4V8.2l1.7 2.1 1.7-2.1v4.2M12.6 8.2v3.4h1.6"/></svg></span>
+                <span class="tool-tab-text"><strong>Markdown → PDF</strong><small>Write, style, export</small></span>
+              </button>
+              <button class="tool-tab" type="button" role="tab" id="tab-pdf-lab" aria-controls="panel-pdf-lab" aria-selected="false" tabindex="-1" data-tool="pdf-lab">
+                <span class="tool-tab-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.4h5.4v9.1H4zM10.6 4.5H16v9.1h-5.4z"/></svg></span>
+                <span class="tool-tab-text"><strong>PDF Lab</strong><small>Merge, split, watermark</small></span>
+              </button>
+              <button class="tool-tab" type="button" role="tab" id="tab-translate" aria-controls="panel-translate" aria-selected="false" tabindex="-1" data-tool="translate">
+                <span class="tool-tab-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3.6 5.5h6.4M6.4 4v1.5M4.8 5.5c0 2.6 1.6 4.4 4.2 5.4M8.2 9.6c-.6 1.4-1.8 2.4-3.4 3M11 15.5l2.4-6 2.4 6M11.8 13.6h3.2"/></svg></span>
+                <span class="tool-tab-text"><strong>Translate PDF</strong><small>Live, line by line</small></span>
+              </button>
+              <button class="tool-tab" type="button" role="tab" id="tab-convert" aria-controls="panel-convert" aria-selected="false" tabindex="-1" data-tool="convert">
+                <span class="tool-tab-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 7.5h9m0 0-2-2m2 2-2 2M15.5 12.5h-9m0 0 2 2m-2-2 2-2"/></svg></span>
+                <span class="tool-tab-text"><strong>Converter</strong><small>Photos, pages, text</small></span>
+              </button>
+              <button class="tool-tab" type="button" role="tab" id="tab-portfolio" aria-controls="panel-portfolio" aria-selected="false" tabindex="-1" data-tool="portfolio">
+                <span class="tool-tab-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="13" height="10" rx="1.3"/><circle cx="7.4" cy="8.7" r="1"/><path d="m5 13 3.2-3 2.2 2 2.4-2.4 3.2 3"/></svg></span>
+                <span class="tool-tab-text"><strong>Photo Portfolio</strong><small>Frames into a PDF book</small></span>
+              </button>
+              <button class="tool-tab" type="button" role="tab" id="tab-finish" aria-controls="panel-finish" aria-selected="false" tabindex="-1" data-tool="finish">
+                <span class="tool-tab-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h9M4 9h6M4 12.5h4"/><path d="m12.6 14.4 1.7 1.7 3.4-3.7" /></svg></span>
+                <span class="tool-tab-text"><strong>Finish</strong><small>Fields, numbers, redact</small></span>
+              </button>
+              <button class="tool-tab" type="button" role="tab" id="tab-sign" aria-controls="panel-sign" aria-selected="false" tabindex="-1" data-tool="sign">
+                <span class="tool-tab-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 14.4c2.5-6.4 4.2 3.3 6.5-1.7 1.4-3.2 2.3 2.8 5-.9"/></svg></span>
+                <span class="tool-tab-text"><strong>Sign</strong><small>Draw, place, countersign</small></span>
+              </button>
             </div>
-            <div class="shortcut-hint"><kbd>⌘</kbd><span>+</span><kbd>↵</kbd><span>to export</span></div>
+          </div>
+        </nav>
+
+        <div class="tool-panels" id="toolPanels">
+          <!-- the one sheet every tab shares; sticky for as long as the tools run -->
+          <div class="page-strip" id="pageStrip" hidden></div>
+          <section class="tool-panel is-active" id="panel-markdown" role="tabpanel" aria-labelledby="tab-markdown" tabindex="-1">
+            <section class="studio" id="workspace" aria-labelledby="workspace-title">
+              <div class="studio-heading">
+                <div>
+                  <p class="section-kicker">The workspace</p>
+                  <h2 id="workspace-title">Make it yours<span>.</span></h2>
+                </div>
+                <div class="shortcut-hint"><span>Press</span><kbd>Ctrl</kbd><span>/</span><kbd>⌘</kbd><kbd>Enter</kbd><span>to export</span></div>
+              </div>
+
+              <div class="workbench">
+                <section class="panel editor-panel" aria-labelledby="editor-heading">
+                  <div class="panel-header editor-header">
+                    <div class="panel-title-group">
+                      <span class="panel-index">01</span>
+                      <div>
+                        <h3 id="editor-heading">Your Markdown</h3>
+                        <p>Write here or open a file</p>
+                      </div>
+                    </div>
+                    <div class="editor-header-actions">
+                      <button class="button button-light button-open" id="openFileButton" type="button">
+                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.25 6.5a1.5 1.5 0 0 1 1.5-1.5h3.1l1.55 1.75h5.85a1.5 1.5 0 0 1 1.5 1.5v6.5a1.5 1.5 0 0 1-1.5 1.5h-10.5a1.5 1.5 0 0 1-1.5-1.5v-8.25Z"/><path d="M10 9.25v4.5m-2-2 2 2 2-2"/></svg>
+                        <span>Open .md</span>
+                      </button>
+                      <button class="button button-text" id="sampleButton" type="button"><span>Try a sample</span></button>
+                      <input id="fileInput" type="file" accept=".md,.markdown,text/markdown,text/plain" hidden />
+                    </div>
+                  </div>
+
+                  <div class="editor-toolbar" role="toolbar" aria-label="Markdown formatting">
+                    <button type="button" class="format-button format-strong" data-format="bold" aria-label="Bold" title="Bold (Ctrl/⌘ + B)"><strong>B</strong></button>
+                    <button type="button" class="format-button format-italic" data-format="italic" aria-label="Italic" title="Italic"><em>I</em></button>
+                    <span class="toolbar-separator" aria-hidden="true"></span>
+                    <button type="button" class="format-button format-heading" data-format="heading" aria-label="Add heading" title="Add a heading">H<sub>2</sub></button>
+                    <button type="button" class="format-button" data-format="quote" aria-label="Add quote" title="Add a quote">
+                      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.2 5.1c-2.8.8-4.1 2.7-4.1 5.5v4.1h5.1v-5H6.8c.2-1.1.8-1.8 2-2.3l-.6-2.3Zm7.6 0c-2.8.8-4.1 2.7-4.1 5.5v4.1h5.1v-5h-2.4c.2-1.1.8-1.8 2-2.3l-.6-2.3Z" fill="currentColor"/></svg>
+                    </button>
+                    <button type="button" class="format-button" data-format="list" aria-label="Add list item" title="Add a list item">
+                      <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4.5" cy="5.5" r=".9" fill="currentColor"/><circle cx="4.5" cy="10" r=".9" fill="currentColor"/><circle cx="4.5" cy="14.5" r=".9" fill="currentColor"/><path d="M8 5.5h8m-8 4.5h8m-8 4.5h8"/></svg>
+                    </button>
+                    <span class="toolbar-separator" aria-hidden="true"></span>
+                    <button type="button" class="format-button" data-format="link" aria-label="Insert link" title="Insert link">
+                      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 12.3 12 8.2m-5.1 6.1H5.7a3.2 3.2 0 0 1 0-6.4h3m2.6-2.2h3a3.2 3.2 0 1 1 0 6.4h-1.2"/></svg>
+                    </button>
+                    <button type="button" class="format-button" data-format="code" aria-label="Inline code" title="Inline code">
+                      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 6-4 4 4 4m6-8 4 4-4 4m-1-10-2 12"/></svg>
+                    </button>
+                    <span class="toolbar-spacer"></span>
+                    <button class="format-button clear-button" id="clearButton" type="button" aria-label="Clear editor" title="Clear editor">
+                      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 6.5h9m-7.9 0 .5 9h5.8l.5-9M8 6.5V4.8h4v1.7m-3 2.2v4.8m2-4.8v4.8"/></svg>
+                    </button>
+                  </div>
+
+                  <div class="editor-wrap" id="editorDropTarget">
+                    <div class="line-gutter" id="lineNumbers" aria-hidden="true"></div>
+                    <textarea id="markdownInput" spellcheck="false" aria-label="Markdown source" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off"></textarea>
+                    <div class="drop-overlay" id="dropOverlay" aria-hidden="true">
+                      <span class="drop-icon"><svg viewBox="0 0 32 32" fill="none"><path d="M16 20.5V5.75m0 0-5.5 5.5M16 5.75l5.5 5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 19v5.25A2.75 2.75 0 0 0 9.75 27h12.5A2.75 2.75 0 0 0 25 24.25V19" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+                      <strong>Drop your Markdown file</strong>
+                      <span>Let go and we'll take it from here</span>
+                    </div>
+                  </div>
+                  <div class="editor-footer">
+                    <div class="file-state"><span class="file-dot"></span><span id="fileName">morning-notes.md</span><span class="footer-divider"></span><span id="wordCount">0 words</span></div>
+                    <span class="autosave-status" id="saveStatus" aria-live="polite">
+                      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.2 2.8 2.8 6.2-6.4"/></svg>
+                      <span>Auto-save ready</span>
+                    </span>
+                  </div>
+                </section>
+
+                <section class="panel preview-panel" aria-labelledby="preview-heading">
+                  <div class="panel-header preview-header">
+                    <div class="panel-title-group">
+                      <span class="panel-index panel-index-green">02</span>
+                      <div>
+                        <h3 id="preview-heading">PDF preview</h3>
+                        <p><span class="live-dot"></span> Updates as you type</p>
+                      </div>
+                    </div>
+                    <div class="panel-header-actions">
+                      <button class="button button-light" id="printButton" type="button" title="Print this document with the page setup above">
+                        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 7.5V4h7v3.5M6.5 14.5H5a1.5 1.5 0 0 1-1.5-1.5v-4A1.5 1.5 0 0 1 5 7.5h10a1.5 1.5 0 0 1 1.5 1.5v4a1.5 1.5 0 0 1-1.5 1.5h-1.5"/><path d="M6.5 12h7v4h-7z"/></svg>
+                        <span>Print</span>
+                      </button>
+                      <button class="button button-export" id="exportButton" type="button">
+                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5v8m0 0 3-3m-3 3-3-3M4.5 12.5v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3"/></svg>
+                        <span>Download PDF</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="preview-controls">
+                    <label class="select-control">
+                      <span>STYLE</span>
+                      <select id="themeSelect" aria-label="PDF style">
+                        <option value="editorial">Editorial</option>
+                        <option value="modern">Modern</option>
+                        <option value="warm">Warm paper</option>
+                      </select>
+                      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.25 3.5 3.5 3.5-3.5"/></svg>
+                    </label>
+                    <span class="controls-divider"></span>
+                    <label class="select-control select-control-paper">
+                      <span>PAPER</span>
+                      <select id="paperSelect" aria-label="PDF paper size">
+                        <option value="a4">A4</option>
+                        <option value="letter">US Letter</option>
+                        <option value="a5">A5</option>
+                      </select>
+                      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.25 3.5 3.5 3.5-3.5"/></svg>
+                    </label>
+                    <span class="controls-divider controls-divider-orientation"></span>
+                    <label class="select-control select-control-orientation">
+                      <span>ORIENTATION</span>
+                      <select id="orientationSelect" aria-label="PDF page orientation">
+                        <option value="portrait">Portrait</option>
+                        <option value="landscape">Landscape</option>
+                      </select>
+                      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.25 3.5 3.5 3.5-3.5"/></svg>
+                    </label>
+                    <span class="controls-divider controls-divider-margin"></span>
+                    <label class="select-control select-control-margin">
+                      <span>MARGINS</span>
+                      <select id="marginSelect" aria-label="PDF page margins">
+                        <option value="comfortable">Comfortable</option>
+                        <option value="compact">Compact</option>
+                        <option value="wide">Wide</option>
+                        <option value="book">Book / bound</option>
+                        <option value="none">Near bleed</option>
+                      </select>
+                      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.25 3.5 3.5 3.5-3.5"/></svg>
+                    </label>
+                    <span class="preview-live-label"><span></span> LIVE</span>
+                  </div>
+
+                  <div class="preview-stage" id="previewStage">
+                    <article class="paper" id="paper" data-print-root data-theme="editorial" data-margin="comfortable" data-orientation="portrait" aria-label="Rendered Markdown document">
+                      <div class="document-content" id="previewContent"></div>
+                    </article>
+                  </div>
+                  <div class="preview-footer">
+                    <span><svg viewBox="0 0 18 18" aria-hidden="true"><path d="M4.25 3.5h9.5v11h-9.5z"/><path d="M7 6.5h4m-4 2.5h4m-4 2.5h2.5"/></svg><span id="paperStatus">A4 · Portrait</span></span>
+                    <span>What you see is what you save</span>
+                  </div>
+                </section>
+              </div>
+
+              <p class="drop-help"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5v8m0 0 3-3m-3 3-3-3M4.5 12.5v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3"/></svg> Tip: you can also drag and drop a <strong>.md</strong> file into the editor, or jump to <a href="#/translate" data-tool-link="translate">Translate PDF</a> to send the draft abroad.</p>
+            </section>
+          </section>
+
+          <section class="tool-panel" id="panel-pdf-lab" role="tabpanel" aria-labelledby="tab-pdf-lab" tabindex="-1" hidden>
+            <div class="tool-loading"><span class="tool-loading-dot"></span> Warming up PDF Lab…</div>
+          </section>
+          <section class="tool-panel" id="panel-translate" role="tabpanel" aria-labelledby="tab-translate" tabindex="-1" hidden>
+            <div class="tool-loading"><span class="tool-loading-dot"></span> Warming up the translator…</div>
+          </section>
+          <section class="tool-panel" id="panel-convert" role="tabpanel" aria-labelledby="tab-convert" tabindex="-1" hidden>
+            <div class="tool-loading"><span class="tool-loading-dot"></span> Warming up the converter…</div>
+          </section>
+          <section class="tool-panel" id="panel-portfolio" role="tabpanel" aria-labelledby="tab-portfolio" tabindex="-1" hidden>
+            <div class="tool-loading"><span class="tool-loading-dot"></span> Setting up the studio…</div>
+          </section>
+          <section class="tool-panel" id="panel-finish" role="tabpanel" aria-labelledby="tab-finish" tabindex="-1" hidden>
+            <div class="tool-loading"><span class="tool-loading-dot"></span> Polishing the finishing tools…</div>
+          </section>
+          <section class="tool-panel" id="panel-sign" role="tabpanel" aria-labelledby="tab-sign" tabindex="-1" hidden>
+            <div class="tool-loading"><span class="tool-loading-dot"></span> Warming the ink…</div>
+          </section>
+        </div>
+
+        <section class="how-section" id="how-it-works" aria-labelledby="how-title">
+          <div class="how-title-block"><p class="section-kicker">No fuss, just finish</p><h2 id="how-title">Three steps to <em>share-worthy.</em></h2></div>
+          <div class="steps">
+            <article class="step-card"><span class="step-number">01</span><h3>Bring your words</h3><p>Paste Markdown or drop in a local .md file. Nothing is uploaded.</p></article>
+            <article class="step-card"><span class="step-number">02</span><h3>Choose your style</h3><p>Pick a paper size, margin, and a refined look for your document.</p></article>
+            <article class="step-card"><span class="step-number">03</span><h3>Save it as PDF</h3><p>Download a print-ready PDF in one click, ready to send or keep.</p></article>
           </div>
         </section>
 
-        <section class="how-section" id="how-it-works" aria-labelledby="how-title">
-          <div class="how-title-block"><p class="section-kicker">NO FUSS, JUST FINISH</p><h2 id="how-title">Seven tools, <em>one studio.</em></h2></div>
-          <div class="steps">
-            <article class="step-card"><span class="step-number">01</span><h3>Markdown → PDF</h3><p>Write or open a .md, pick a paper size, margin and look, then save a print-ready PDF.</p></article>
-            <article class="step-card"><span class="step-number">02</span><h3>Converter</h3><p>Photos into a PDF, PDFs into Markdown or per-page images, batch-shrink a folder.</p></article>
-            <article class="step-card"><span class="step-number">03</span><h3>PDF Lab</h3><p>Merge, reorder, rotate, split, and stamp a text watermark on any PDF.</p></article>
-            <article class="step-card"><span class="step-number">04</span><h3>Finish</h3><p>Edit metadata, stamp footers, redact terms (with an optional flatten), checksum the file.</p></article>
-            <article class="step-card"><span class="step-number">05</span><h3>Sign</h3><p>Draw a signature, drop it on a page, add a countersignature, and flatten the mark in.</p></article>
-            <article class="step-card"><span class="step-number">06</span><h3>Translate PDF</h3><p>Extract text page by page, translate live, and export a bilingual PDF or Markdown.</p></article>
-            <article class="step-card"><span class="step-number">07</span><h3>Photo Portfolio</h3><p>A photo book with cover, plates, colophon, and page numbers — exported as a PDF.</p></article>
-          </div>
+        <section class="more-section" id="more-tools" aria-labelledby="more-title">
+          <div class="how-title-block"><p class="section-kicker">The road ahead</p><h2 id="more-title">More tools <em>on the bench.</em></h2></div>
+          <ul class="idea-list" id="ideaList"></ul>
         </section>
       </main>
 
       <footer class="site-footer">
         <a class="footer-brand" href="#top">folio<span>.</span></a>
-        <span>A small document studio, made simply.</span>
+        <span>Thoughtful documents, made simply.</span>
         <span class="footer-private"><span></span> Your files stay yours</span>
       </footer>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <noscript><p class="local-setup-notice">Folio runs on JavaScript — enable it, or open the Markdown studio in a browser with scripting allowed.</p></noscript>
     <script type="module">
-      // Direct file:// mode: only the Markdown tab can run, because the
-      // browser blocks ES module imports from a file:// origin. The
-      // other tools (PDF Lab, Sign, Finish, …) need a bundler, so we
-      // point the user back at `npm run dev` from any non-Markdown tab.
+      const IDEAS = [
+        { title: 'Form fields & answers', note: 'Fill a PDF’s fields and flatten the answers into the page — no reader required.', tag: 'next' },
+        { title: 'Batch rename & merge', note: 'Feed Folio a folder: it names each PDF from its title page and stitches them in order.', tag: 'next' },
+        { title: 'Bookmarks & links', note: 'Read a PDF outline, split by bookmark, or rewrite the links inside it.', tag: 'soon' },
+        { title: 'OCR for scans', note: 'Wire in Tesseract.js so photographed pages become searchable text.', tag: 'soon' },
+        { title: 'Exif studio', note: 'Strip or write camera metadata before a portfolio goes public.', tag: 'soon' },
+        { title: 'Print dialog sheet', note: 'Bleed, crop marks and imposition presets for real print shops.', tag: 'idea' },
+        { title: 'Zine maker', note: 'One sheet, folded: Folio rearranges pages so A4 prints as an 8-page mini zine.', tag: 'idea' },
+        { title: 'Invoice & letterhead', note: 'Saved identities, page furniture, and repeatable templates.', tag: 'idea' },
+      ];
+
+      const list = document.querySelector('#ideaList');
+      if (list) {
+        list.innerHTML = IDEAS.map((idea) => `<li class="idea-card"><span class="idea-tag" data-tag="${idea.tag.toLowerCase()}">${idea.tag}</span><h3>${idea.title}</h3><p>${idea.note}</p></li>`).join('');
+      }
+
       if (window.location.protocol === 'file:') {
         const loadLocalScript = (src) => new Promise((resolve, reject) => {
           const script = document.createElement('script');
@@ -99,53 +315,40 @@
           await loadLocalScript('./node_modules/marked/lib/marked.umd.js');
           await loadLocalScript('./node_modules/dompurify/dist/purify.min.js');
           await loadLocalScript('./node_modules/html2pdf.js/dist/html2pdf.bundle.min.js');
-          // In file:// mode we only ship the original Folio editor; the
-          // studio tabs are Vite-only. We mount it as a single panel.
-          const { mountStudioShell, registerTab } = await import('./src/shell.js');
-          registerTab({
-            id: 'markdown',
-            index: '01',
-            label: 'Markdown → PDF',
-            description: 'Write, preview, export',
-            intro: 'You opened this directly from disk. Only the Markdown tab runs in this mode; the other tools need `npm run dev`.',
-            load: (root) => import('./src/tools/markdown.js').then((mod) => mod.start(root, {
-              marked: window.marked,
-              DOMPurify: window.DOMPurify,
-            })),
+          await loadLocalScript('./src/page.js');
+          await loadLocalScript('./src/app-core.js');
+          window.startFolioApp({
+            marked: window.marked,
+            DOMPurify: window.DOMPurify,
+            loadHtml2Pdf: async () => window.html2pdf,
           });
-          mountStudioShell(document.querySelector('.app-shell'));
         } catch (error) {
           console.error('Folio local startup failed:', error);
           const notice = document.createElement('p');
           notice.className = 'local-setup-notice';
-          notice.textContent = 'To run Folio directly from this file, install its dependencies once with “npm install” in the project folder, then reopen index.html. For the full studio use “npm run dev”.';
+          notice.textContent = 'To run Folio directly from this file, install its dependencies once with “npm install” in the project folder, then reopen index.html.';
           document.body.append(notice);
         }
+
+        // Offline mode keeps the Markdown studio; the other tabs explain why.
+        const note = '<div class="tool-notice"><strong>Offline mode</strong><p>Opening <code>index.html</code> straight from disk runs the Markdown studio only. Start <code>npm run dev</code> and open <code>http://localhost:5173/</code> for PDF Lab, Translate, Converter and Portfolio.</p></div>';
+        document.querySelectorAll('.tool-panel:not(#panel-markdown)').forEach((panel) => {
+          panel.innerHTML = note;
+        });
+        document.querySelectorAll('#toolNav [data-tool]').forEach((button) => {
+          button.addEventListener('click', () => {
+            document.querySelectorAll('#toolNav [data-tool]').forEach((other) => {
+              const on = other === button;
+              other.classList.toggle('is-active', on);
+              other.setAttribute('aria-selected', String(on));
+            });
+            document.querySelectorAll('.tool-panel').forEach((panel) => {
+              panel.hidden = panel.id !== 'panel-' + button.dataset.tool;
+            });
+          });
+        });
       } else {
-        try {
-          await import('./src/main.js');
-        } catch (error) {
-          console.error('Folio studio failed to start:', error);
-          const notice = document.createElement('div');
-          notice.className = 'local-setup-notice';
-          const heading = document.createElement('strong');
-          heading.textContent = 'The studio did not load.';
-          const detail = document.createElement('p');
-          detail.textContent = (error && error.message) ? error.message : String(error);
-          notice.append(heading, detail);
-          // Surface the stack so the user can paste it back without
-          // having to open dev tools.
-          if (error && error.stack) {
-            const stack = document.createElement('pre');
-            stack.style.cssText = 'white-space: pre-wrap; word-break: break-word; margin-top: 12px; padding: 10px 12px; background: rgba(0,0,0,0.04); border-radius: 8px; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; line-height: 1.5; max-height: 220px; overflow: auto;';
-            stack.textContent = error.stack;
-            notice.append(stack);
-          }
-          const hint = document.createElement('p');
-          hint.textContent = 'Hard refresh (Cmd/Ctrl+Shift+R) after any change. The block above is the JS error and where it happened.';
-          notice.append(hint);
-          document.body.append(notice);
-        }
+        await import('./src/main.js');
       }
     </script>
   </body>
