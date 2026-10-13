@@ -102,7 +102,7 @@ function layout() {
         <span class="pf-exif-count" id="pfExifCount">no photos yet</span>
       </div>
       <p class="lab-help">Camera files often carry a GPS pin, the device's serial, and a timestamp. Read what's on each photo, then strip what you don't want shown, or write your own name and a copyright line in.</p>
-      <p class="pf-exif-empty" id="pfExifEmpty">Add photos above to read their EXIF and decide what to strip.</p>
+      <p class="pf-exif-empty" id="pfExifEmpty">Add photos above to start.</p>
       <ul class="pf-exif-list" id="pfExifList" role="list"></ul>
       <div class="pf-exif-actions">
         <button class="button button-light" type="button" id="pfExifReadAll">Read all</button>
