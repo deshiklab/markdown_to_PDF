@@ -558,3 +558,94 @@ kbd { display: inline-grid; place-items: center; min-width: 19px; height: 19px; 
   .finish-row-label { font-size: 9px; }
   .finish-status { font-size: 9px; }
 }
+
+/* ---------------------------------------------------------------------------
+   PDF Lab tab — sub-tabs, page grid (thumbnails), settings rows, file area.
+   --------------------------------------------------------------------------- */
+
+.tool-pdflab { padding: 22px 22px 26px; }
+.pdflab-subtabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; padding: 0 2px 10px; border-bottom: 1px solid #ececdf; }
+.pdflab-subtab { display: flex; flex-direction: column; gap: 2px; min-width: 156px; flex: 0 1 auto; padding: 8px 12px; border: 1px solid transparent; border-radius: 9px; color: #6b776e; background: transparent; cursor: pointer; text-align: left; transition: background .15s, color .15s, border-color .15s; }
+.pdflab-subtab:hover { color: #3f6b4f; background: #f1f5ed; }
+.pdflab-subtab.is-active { color: #2c4a3b; border-color: #c8d8b9; background: #f3f7ec; }
+.pdflab-subtab-title { font-size: 11px; font-weight: 700; }
+.pdflab-subtab-sub { color: #8b9185; font-size: 9px; line-height: 1.35; }
+
+.pdflab-stage { display: block; }
+.pdflab-sub { display: flex; flex-direction: column; gap: 16px; }
+.pdflab-sub-head h3 { margin: 0 0 4px; color: #2c4a3b; font-size: 15px; letter-spacing: -.2px; }
+.pdflab-sub-head p { margin: 0; color: #7c857c; font-size: 11px; line-height: 1.55; max-width: 620px; }
+
+.pdflab-file-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid #e8e8e1; border-radius: 10px; background: #fff; }
+.pdflab-file-bar.is-drag { border-color: #4e7559; background: #ecf3e6; }
+.pdflab-file-bar-status { color: #7c857c; font-size: 10px; }
+
+.pdflab-page-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 12px; padding: 4px; min-height: 120px; }
+.pdflab-page { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid #e8e8e1; border-radius: 9px; background: #fff; transition: border-color .15s, box-shadow .15s, transform .15s; cursor: grab; }
+.pdflab-page.is-dragging { opacity: 0.4; }
+.pdflab-page.is-drop-target { border-color: #4e7559; box-shadow: 0 0 0 3px rgba(78, 117, 89, .15); }
+.pdflab-page-canvas { display: grid; place-items: center; min-height: 110px; padding: 4px; background: #f6f5f0; border-radius: 5px; }
+.pdflab-page-canvas canvas { display: block; max-width: 100%; height: auto; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.pdflab-page-canvas:empty::before { content: '…'; color: #a8ad9f; font-size: 18px; }
+.pdflab-page-meta { display: flex; align-items: center; gap: 6px; }
+.pdflab-page-index { color: #4e7559; font-family: var(--mono); font-size: 9px; font-weight: 700; }
+.pdflab-page-name { flex: 1; min-width: 0; color: #707870; font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdflab-page-actions { display: flex; align-items: center; gap: 4px; }
+.pdflab-page-rotate, .pdflab-page-remove { display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 5px; background: transparent; cursor: pointer; font-size: 14px; line-height: 1; }
+.pdflab-page-rotate { color: #5e8064; }
+.pdflab-page-rotate:hover { background: #ecf3e6; }
+.pdflab-page-remove { color: #b3625b; }
+.pdflab-page-remove:hover { background: #fbeae6; }
+
+.pdflab-foot { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid #e8e8e1; border-radius: 10px; background: #fff; }
+.pdflab-status { color: #48544c; font-family: var(--mono); font-size: 10px; line-height: 1.5; }
+.pdflab-foot .button-export { min-width: 150px; }
+
+.pdflab-sub-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 16px; align-items: start; }
+.pdflab-settings { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid #e8e8e1; border-radius: 11px; background: #fafbf6; }
+.pdflab-settings-title { margin: 0 0 4px; color: #2c4a3b; font-size: 11px; font-weight: 700; letter-spacing: .3px; }
+
+.pdflab-row { display: grid; grid-template-columns: 110px minmax(0, 1fr); align-items: center; gap: 10px; padding: 6px 0; }
+.pdflab-row-label { color: #707870; font-size: 10px; font-weight: 600; letter-spacing: .3px; }
+.pdflab-row-control { position: relative; display: flex; align-items: center; gap: 6px; }
+.pdflab-row-control select, .pdflab-row-control input[type="text"] { width: 100%; padding: 5px 8px; border: 1px solid #e0e2d8; border-radius: 6px; color: #48544c; background: #fff; font-size: 10px; font-weight: 600; outline: none; }
+.pdflab-row-control select { padding-right: 22px; appearance: none; }
+.pdflab-row-control input[type="text"]:focus, .pdflab-row-control select:focus { border-color: #8fb087; box-shadow: 0 0 0 3px rgba(143, 176, 135, .15); }
+.pdflab-row-control svg { position: absolute; right: 8px; width: 10px; height: 10px; fill: none; stroke: #929a91; stroke-width: 1.4; pointer-events: none; }
+.pdflab-row-hint { color: #95998f; font-size: 9px; }
+.pdflab-row-range { gap: 8px; }
+.pdflab-row-range input[type="range"] { flex: 1; -webkit-appearance: none; height: 4px; background: #dde3d4; border-radius: 999px; outline: none; }
+.pdflab-row-range input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #4e7559; border: 2px solid #fff; box-shadow: 0 1px 2px rgba(0,0,0,.12); cursor: pointer; }
+.pdflab-row-range input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #4e7559; border: 2px solid #fff; cursor: pointer; }
+.pdflab-row-value { color: #48544c; font-family: var(--mono); font-size: 10px; min-width: 44px; text-align: right; }
+.pdflab-row-color input[type="color"] { width: 100%; height: 28px; padding: 0; border: 1px solid #e0e2d8; border-radius: 6px; background: #fff; cursor: pointer; }
+
+.pdflab-files { display: flex; flex-direction: column; gap: 10px; }
+.pdflab-drop { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 18px 14px; border: 1.5px dashed #cfd9cb; border-radius: 11px; color: #657265; background: #fafcf6; text-align: center; transition: background .15s, border-color .15s, color .15s; }
+.pdflab-drop.is-drag { border-color: #4e7559; color: #2c4a3b; background: #ecf3e6; }
+.pdflab-drop svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.pdflab-drop strong { font-size: 12px; }
+.pdflab-drop span { font-size: 10px; }
+.pdflab-drop .button { margin-top: 6px; }
+.pdflab-file-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow: auto; padding-right: 4px; }
+.pdflab-file-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid #e8e8e1; border-radius: 8px; background: #fff; }
+.pdflab-file-name { overflow: hidden; color: #48544c; font-family: var(--mono); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.pdflab-file-size { color: #95998f; font-size: 9px; }
+.pdflab-file-remove { display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 6px; color: #b3625b; background: transparent; cursor: pointer; font-size: 14px; line-height: 1; }
+.pdflab-file-remove:hover { background: #fbeae6; }
+
+@media (max-width: 900px) {
+  .pdflab-sub-body { grid-template-columns: minmax(0, 1fr); }
+  .pdflab-subtab { min-width: 0; flex: 1 1 calc(50% - 4px); }
+  .pdflab-row { grid-template-columns: 90px minmax(0, 1fr); }
+}
+@media (max-width: 600px) {
+  .tool-pdflab { padding: 16px 14px 18px; }
+  .pdflab-subtab { flex: 1 1 100%; }
+  .pdflab-foot { flex-direction: column; align-items: stretch; gap: 10px; }
+  .pdflab-foot .button-export { width: 100%; }
+  .pdflab-row { grid-template-columns: 1fr; gap: 4px; }
+  .pdflab-row-label { font-size: 9px; }
+  .pdflab-page-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+  .pdflab-page-canvas { min-height: 90px; }
+}
