@@ -97,8 +97,8 @@ function layout() {
     </div>
 
     <div class="pf-exif" id="pfExif">
-      <div class="pf-exif-head">
-        <h4 class="pf-h4">EXIF studio</h4>
+      <div class="pf-photos-head pf-exif-head">
+        <span>EXIF studio</span>
         <span class="pf-exif-count" id="pfExifCount">no photos yet</span>
       </div>
       <p class="lab-help">Camera files often carry a GPS pin, the device's serial, and a timestamp. Read what's on each photo, then strip what you don't want shown, or write your own name and a copyright line in.</p>
