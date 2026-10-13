@@ -300,12 +300,24 @@ export function startShell({ loaders } = {}) {
     strip.hidden = false;
     mountControls(strip);
     // the tab bar and the strip both stick, so the strip needs to know how tall
-    // the bar is or it would slide over it
+    // the bar is or it would slide over it. Measure in a rAF so the nav has
+    // finished layout (including any web-font swap), and include the nav's
+    // own margin-bottom so the strip sits flush under it — not at the nav's
+    // content edge with the margin collapsing into a visible gap.
     const nav = q('#toolNav');
-    const paintOffset = () => document.documentElement.style.setProperty('--nav-h', `${nav?.offsetHeight ?? 86}px`);
+    const paintOffset = () => {
+      requestAnimationFrame(() => {
+        const h = nav?.getBoundingClientRect().height ?? 86;
+        const mb = nav ? parseFloat(getComputedStyle(nav).marginBottom) || 0 : 0;
+        document.documentElement.style.setProperty('--nav-h', `${h + mb}px`);
+      });
+    };
     paintOffset();
     window.addEventListener('resize', paintOffset, { passive: true });
     document.fonts?.ready.then(paintOffset);
+    // the strip's own height changes when its controls swap (e.g. paper size
+    // select opens), so repaint after mount too
+    requestAnimationFrame(paintOffset);
   }
 
   const scroller = q('#toolNav .tool-nav-scroll');
