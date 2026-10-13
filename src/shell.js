@@ -183,6 +183,12 @@ export async function switchTab(id, { replace = false } = {}) {
     console.warn(`Unknown tab id: ${id}`);
     return;
   }
+  if (id === currentTabId && activeInstance) {
+    // Already on this tab; still scroll the card into view and bail.
+    keepActiveTabVisible();
+    updateStripFades();
+    return;
+  }
 
   // URL hash sync.
   const newHash = `#${tab.id}`;
@@ -270,9 +276,15 @@ function updateStripFades() {
   if (!strip) return;
   const left = $(`#${STRIP_FADE_LEFT}`);
   const right = $(`#${STRIP_FADE_RIGHT}`);
+  const prev = $(`#${PREV_BTN_ID}`);
+  const next = $(`#${NEXT_BTN_ID}`);
   const max = strip.scrollWidth - strip.clientWidth - 1;
-  if (left) left.classList.toggle('is-active', strip.scrollLeft > 4);
-  if (right) right.classList.toggle('is-active', strip.scrollLeft < max - 4);
+  const atStart = strip.scrollLeft <= 4;
+  const atEnd = strip.scrollLeft >= max - 4;
+  if (left) left.classList.toggle('is-active', !atStart);
+  if (right) right.classList.toggle('is-active', !atEnd);
+  if (prev) prev.disabled = atStart;
+  if (next) next.disabled = atEnd;
 }
 
 function wireKeyboard() {

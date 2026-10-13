@@ -338,24 +338,33 @@ kbd { display: inline-grid; place-items: center; min-width: 19px; height: 19px; 
    Studio shell — tab strip, intro line, panel, placeholders.
    --------------------------------------------------------------------------- */
 
-.tool-nav { position: relative; display: flex; align-items: center; gap: 6px; margin: 0 -4px 16px; padding: 4px 4px 0; }
-.tool-nav-scroll { display: flex; align-items: stretch; gap: 9px; flex: 1 1 auto; min-width: 0; padding: 4px 0 8px; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x proximity; scrollbar-width: none; -ms-overflow-style: none; }
+.tool-nav { position: relative; display: flex; align-items: center; gap: 8px; margin: 0 0 18px; padding: 2px 0 0; }
+.tool-nav-scroll { display: flex; align-items: stretch; gap: 9px; flex: 1 1 auto; min-width: 0; padding: 4px 32px 8px; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x proximity; scrollbar-width: none; -ms-overflow-style: none; }
 .tool-nav-scroll::-webkit-scrollbar { display: none; }
-.tool-nav-card { scroll-snap-align: center; display: inline-flex; align-items: center; gap: 10px; flex: 0 0 auto; min-width: 132px; max-width: 220px; height: 56px; padding: 0 14px; border: 1px solid #e8e8e1; border-radius: 11px; color: #6b776e; background: #fff; cursor: pointer; font: inherit; text-align: left; transition: border-color .18s, color .18s, background .18s, transform .18s; }
+.tool-nav-card { scroll-snap-align: center; display: inline-flex; align-items: center; gap: 10px; flex: 0 0 auto; width: 184px; height: 58px; padding: 0 14px; border: 1px solid #e8e8e1; border-radius: 11px; color: #6b776e; background: #fff; cursor: pointer; font: inherit; text-align: left; transition: border-color .18s, color .18s, background .18s, transform .18s, box-shadow .18s; }
 .tool-nav-card:hover { color: #3f6b4f; border-color: #d6dccd; background: #fafcf6; }
-.tool-nav-card.is-active { color: #2c4a3b; border-color: #c8d8b9; background: linear-gradient(180deg, #f7fbf2, #eff5e8); box-shadow: 0 2px 6px rgba(49, 95, 80, .08); }
+.tool-nav-card:focus-visible { outline: 2px solid #5e8a6a; outline-offset: 2px; }
+.tool-nav-card.is-active { color: #2c4a3b; border-color: #b8ccac; background: linear-gradient(180deg, #f7fbf2, #eff5e8); box-shadow: 0 2px 6px rgba(49, 95, 80, .08), inset 0 -2px 0 #6e9476; }
 .tool-nav-card-index { display: grid; place-items: center; width: 26px; height: 26px; flex: 0 0 26px; border: 1px solid #e4e7dd; border-radius: 7px; color: #70806c; background: #f4f6ef; font-family: var(--mono); font-size: 9px; }
 .tool-nav-card.is-active .tool-nav-card-index { color: #4e7559; border-color: #c8d8b9; background: #edf4e9; }
 .tool-nav-card-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.tool-nav-card-title { font-size: 11px; font-weight: 700; letter-spacing: -.1px; }
+.tool-nav-card-title { font-size: 12px; font-weight: 700; letter-spacing: -.1px; }
 .tool-nav-card-sub { color: #95998f; font-size: 9px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tool-nav-fade { position: absolute; z-index: 1; top: 6px; bottom: 10px; width: 28px; pointer-events: none; opacity: 0; transition: opacity .18s; }
+.tool-nav-fade { position: absolute; z-index: 1; top: 4px; bottom: 6px; width: 32px; pointer-events: none; opacity: 0; transition: opacity .18s; }
 .tool-nav-fade.is-active { opacity: 1; }
-.tool-nav-fade-left { left: 32px; background: linear-gradient(90deg, #f6f5f0, rgba(246, 245, 240, 0)); }
-.tool-nav-fade-right { right: 32px; background: linear-gradient(270deg, #f6f5f0, rgba(246, 245, 240, 0)); }
+.tool-nav-fade-left { left: 0; background: linear-gradient(90deg, #f6f5f0 30%, rgba(246, 245, 240, 0)); }
+.tool-nav-fade-right { right: 0; background: linear-gradient(270deg, #f6f5f0 30%, rgba(246, 245, 240, 0)); }
 .tool-nav-arrow { display: none; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; border: 1px solid #e4e7dd; border-radius: 50%; color: #6b776e; background: #fff; cursor: pointer; transition: border-color .15s, color .15s; }
 .tool-nav-arrow:hover { color: #3f6b4f; border-color: #cfd9cb; }
+.tool-nav-arrow:focus-visible { outline: 2px solid #5e8a6a; outline-offset: 2px; }
+.tool-nav-arrow:disabled { opacity: .35; cursor: default; }
 .tool-nav-arrow svg { width: 14px; height: 14px; }
+@media (min-width: 760px) {
+  .tool-nav-arrow { display: grid; }
+  .tool-nav-scroll { padding-left: 0; padding-right: 0; }
+  .tool-nav-fade-left { left: 38px; }
+  .tool-nav-fade-right { right: 38px; }
+}
 
 .tool-intro { margin: 0 0 14px 2px; color: #7c857c; font-size: 11px; line-height: 1.55; max-width: 760px; }
 
