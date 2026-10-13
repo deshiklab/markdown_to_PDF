@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - arena/0fa301ce-markdown-to-pdf
+      - arena/79a64710-markdown-to-pdf
   workflow_dispatch:
 
 permissions:
