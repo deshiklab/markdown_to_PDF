@@ -271,24 +271,35 @@ function svg(d) {
 // ---------------------------------------------------------------------------
 
 function wireMarkdownTool(root, { marked, DOMPurify, loadPdf }) {
-  const input = root.querySelector('#markdownInput');
-  const previewContent = root.querySelector('#previewContent');
-  const paper = root.querySelector('#paper');
-  const paperSelect = root.querySelector('#paperSelect');
-  const themeSelect = root.querySelector('#themeSelect');
-  const marginSelect = root.querySelector('#marginSelect');
-  const orientationSelect = root.querySelector('#orientationSelect');
-  const saveStatus = root.querySelector('#saveStatus');
-  const saveStatusText = saveStatus.querySelector('span');
-  const fileNameLabel = root.querySelector('#fileName');
-  const wordCountLabel = root.querySelector('#wordCount');
-  const lineNumbers = root.querySelector('#lineNumbers');
-  const fileInput = root.querySelector('#fileInput');
-  const editorPanel = root.querySelector('.editor-panel');
-  const dropTarget = root.querySelector('#editorDropTarget');
-  const openFileButton = root.querySelector('#openFileButton');
-  const exportButton = root.querySelector('#exportButton');
-  const paperStatus = root.querySelector('#paperStatus');
+  const $ = (sel) => root.querySelector(sel);
+  const input = $('#markdownInput');
+  const previewContent = $('#previewContent');
+  const paper = $('#paper');
+  const paperSelect = $('#paperSelect');
+  const themeSelect = $('#themeSelect');
+  const marginSelect = $('#marginSelect');
+  const orientationSelect = $('#orientationSelect');
+  const saveStatus = $('#saveStatus');
+  const saveStatusText = saveStatus ? saveStatus.querySelector('span') : null;
+  const fileNameLabel = $('#fileName');
+  const wordCountLabel = $('#wordCount');
+  const lineNumbers = $('#lineNumbers');
+  const fileInput = $('#fileInput');
+  const editorPanel = $('.editor-panel');
+  const dropTarget = $('#editorDropTarget');
+  const openFileButton = $('#openFileButton');
+  const exportButton = $('#exportButton');
+  const paperStatus = $('#paperStatus');
+
+  // Verify the expected DOM exists; if not, fail loudly with a helpful
+  // message rather than a generic "Cannot read properties of null"
+  // somewhere downstream.
+  const required = { input, previewContent, paper, saveStatus, saveStatusText };
+  for (const [name, el] of Object.entries(required)) {
+    if (!el) {
+      throw new Error(`Markdown tool: required element #${name} not found in panel.`);
+    }
+  }
 
   const workspaceStorageKey = 'folio:workspace:v1';
   let currentFileName = 'morning-notes.md';
