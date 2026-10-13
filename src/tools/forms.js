@@ -73,6 +73,8 @@ const state = {
   pageCount: 0,
   // add-mode: the list of fields the user has placed on pages
   staged: [],
+  // read-mode: the fields parsed out of the loaded PDF
+  read: [],
   // fill-mode: the answers the user has typed
   answers: {},
 };
@@ -310,6 +312,7 @@ async function loadFile(file, root) {
     paintMode(root);
     paintStaged(root);
     paintPreview(root);
+    parseReadFields(root);
     toast(`Loaded ${file.name} (${state.pageCount} pages)`);
   } catch (err) {
     console.error('forms: loadFile failed', err);
@@ -323,6 +326,8 @@ function clearFile(root) {
   state.size = 0;
   state.pageCount = 0;
   state.staged = [];
+  state.read = [];
+  state.answers = {};
   if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
   state.previewUrl = null;
   paintCard(root);
@@ -440,11 +445,14 @@ function paintMode(root) {
 
   // mode-specific hints
   const addHint = q('#fmAddHint', root);
-  if (addHint) addHint.textContent = state.buffer ? 'Type a unique name, choose a field type, then Add to page.' : 'Open a PDF to start placing fields.';
+  if (addHint) addHint.textContent = state.buffer ? 'Pick a type, type a name, then click on the page to place it.' : 'Open a PDF to start placing fields.';
   const readHint = q('#fmReadHint', root);
   if (readHint) readHint.textContent = state.buffer ? 'Fields found in this PDF are listed below.' : 'Open a PDF to read its fields.';
   const fillHint = q('#fmFillHint', root);
   if (fillHint) fillHint.textContent = state.buffer ? 'Type answers below; they will be written into the file.' : 'Open a PDF with form fields to start filling.';
+
+  if (state.mode === 'read') paintReadList(root);
+  // fill-mode: paintFillList lands in the next commit
 }
 
 function paintOptionsRow(root) {
@@ -601,14 +609,122 @@ async function exportAdd(root) {
   }
 }
 
-/* -------------------------------------------------- read-mode (stub) ---- */
+/* -------------------------------------------------- read-mode ---- */
+async function parseReadFields(root) {
+  if (!state.buffer) { state.read = []; paintReadList(root); return; }
+  try {
+    const { PDFDocument } = await loadPdfLib();
+    const pdfDoc = await PDFDocument.load(state.buffer.slice(0), { ignoreEncryption: true });
+    const form = pdfDoc.getForm();
+    const pages = pdfDoc.getPages();
+    const pageIndexByObj = new Map(pages.map((p, i) => [p.ref.objectNumber, i + 1]));
+    const fields = form.getFields();
+    state.read = fields.map((field) => {
+      const widgets = field.acroField.getWidgets();
+      const pageNums = widgets
+        .map((w) => {
+          const P = typeof w.P === 'function' ? w.P() : w.P;
+          return P?.objectNumber ? pageIndexByObj.get(P.objectNumber) : null;
+        })
+        .filter((n) => n);
+      const page = pageNums.length ? Math.min(...pageNums) : null;
+      const { kind, value } = readFieldValue(field);
+      return { name: field.getName(), kind, value, page };
+    });
+  } catch (err) {
+    console.warn('forms: parseReadFields failed', err);
+    state.read = [];
+  }
+  paintReadList(root);
+}
+
+function readFieldValue(field) {
+  const cn = field.constructor.name;
+  if (cn === 'PDFTextField') {
+    return { kind: 'text', value: field.getText() || '' };
+  }
+  if (cn === 'PDFCheckBox') {
+    return { kind: 'checkbox', value: field.isChecked() ? 'on' : 'off' };
+  }
+  if (cn === 'PDFDropdown') {
+    const sel = field.getSelected();
+    return { kind: 'dropdown', value: sel && sel.length ? sel.join(', ') : '' };
+  }
+  if (cn === 'PDFOptionList') {
+    const sel = field.getSelected();
+    return { kind: 'listbox', value: sel && sel.length ? sel.join(', ') : '' };
+  }
+  if (cn === 'PDFRadioGroup') {
+    return { kind: 'radio', value: field.getSelected() || '' };
+  }
+  if (cn === 'PDFButton') {
+    return { kind: 'button', value: '' };
+  }
+  if (cn === 'PDFSignature') {
+    return { kind: 'signature', value: '' };
+  }
+  return { kind: 'unknown', value: '' };
+}
+
+function paintReadList(root) {
+  const list = q('#fmReadList', root);
+  if (!list) return;
+  if (state.read.length === 0) {
+    list.innerHTML = '';
+    return;
+  }
+  list.innerHTML = state.read.map((f) => `
+    <div class="fm-read-row">
+      <span class="fm-kind">${escapeHtml(f.kind)}</span>
+      <div>
+        <div class="fm-name">${escapeHtml(f.name)}</div>
+        <div class="fm-value">${escapeHtml(f.value || '—')}</div>
+      </div>
+      <span class="fm-page">${f.page ? `p.${f.page}` : ''}</span>
+    </div>
+  `).join('');
+}
+
+function readToJson() {
+  return JSON.stringify({
+    file: state.name,
+    pages: state.pageCount,
+    fields: state.read.map((f) => ({ name: f.name, type: f.kind, value: f.value, page: f.page })),
+  }, null, 2);
+}
+
+function readToCsv() {
+  const header = 'name,type,value,page';
+  const escape = (s) => {
+    const v = s == null ? '' : String(s);
+    return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+  };
+  const rows = state.read.map((f) => [f.name, f.kind, f.value, f.page ?? ''].map(escape).join(','));
+  return [header, ...rows].join('\n');
+}
+
 async function copyAnswers(root) {
   if (!state.buffer) { toast('Open a PDF first'); return; }
-  toast('Read-answers parser is the next commit.');
+  if (state.read.length === 0) { toast('No fields to copy'); return; }
+  const text = state.form.readFormat === 'csv' ? readToCsv() : readToJson();
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(`Copied ${state.read.length} field${state.read.length === 1 ? '' : 's'} as ${state.form.readFormat.toUpperCase()}`);
+  } catch (err) {
+    console.warn('clipboard write failed', err);
+    toast('Could not copy — your browser blocked clipboard access');
+  }
 }
+
 async function downloadAnswers(root) {
   if (!state.buffer) { toast('Open a PDF first'); return; }
-  toast('Read-answers parser is the next commit.');
+  if (state.read.length === 0) { toast('No fields to download'); return; }
+  const text = state.form.readFormat === 'csv' ? readToCsv() : readToJson();
+  const mime = state.form.readFormat === 'csv' ? 'text/csv' : 'application/json';
+  const ext = state.form.readFormat;
+  const base = (state.name || 'answers').replace(/\.pdf$/i, '');
+  downloadBlob(new Blob([text], { type: mime }), `answers-${base}.${ext}`);
+  toast(`Downloaded ${state.read.length} field${state.read.length === 1 ? '' : 's'} as ${state.form.readFormat.toUpperCase()}`);
 }
 
 /* -------------------------------------------------- fill-mode (stub) ---- */
