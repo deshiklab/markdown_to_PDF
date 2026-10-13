@@ -971,15 +971,22 @@ async function runOcr(root) {
     const status = q('#cvOcrStatus', root);
     if (status) status.textContent = `Loaded model — processing ${ranges.length} page${ranges.length === 1 ? '' : 's'}`;
     setOcrProgress(root, 0);
-    // The actual writers (searchable PDF / plain text) land in the next commits.
+    // Collect the recognised text per page so the writer can stitch it.
+    const pages = [];
     for (let i = 0; i < ranges.length; i += 1) {
       const pageNum = ranges[i];
       if (status) status.textContent = `Recognising page ${i + 1} of ${ranges.length}…`;
       const { canvas } = await ocrRenderPageToCanvas(doc, pageNum, Number(state.form.ocrDpi) || 300);
-      await worker.recognize(canvas);
+      const { data } = await worker.recognize(canvas);
+      pages.push({ page: pageNum, text: (data.text || '').trim() });
     }
-    if (status) status.textContent = 'Done — the writer lands in the next commit.';
-    toast('OCR ran. The PDF/text writer lands in the next commit.');
+    if (state.form.ocrOutput === 'text') {
+      exportOcrText(pdf, pages);
+    } else {
+      // Searchable PDF writer lands in the next commit; for now the run completes.
+      if (status) status.textContent = `Recognised ${pages.length} page${pages.length === 1 ? '' : 's'} — searchable-PDF writer is the next commit.`;
+      toast('OCR ran. The searchable-PDF writer lands in the next commit.');
+    }
   } catch (err) {
     console.error('ocr: failed', err);
     toast('OCR failed — check the console');
@@ -988,4 +995,15 @@ async function runOcr(root) {
     state.busy = false;
     setTimeout(() => hideOcrProgress(root), 1500);
   }
+}
+
+function exportOcrText(pdf, pages) {
+  const base = pdf.name.replace(/\.pdf$/i, '');
+  // Markdown-ish: each page is a section header + body. Newlines inside a page
+  // are preserved; pages are separated by a horizontal rule and a blank line.
+  const body = pages
+    .map((p) => `## Page ${p.page}\n\n${p.text}`)
+    .join('\n\n---\n\n');
+  const blob = new Blob([body + '\n'], { type: 'text/markdown;charset=utf-8' });
+  downloadBlob(blob, safeFileName(`${base}-ocr`, 'md'));
 }
