@@ -102,7 +102,11 @@ function layout() {
         <span class="pf-exif-count" id="pfExifCount">no photos yet</span>
       </div>
       <p class="lab-help">Camera files often carry a GPS pin, the device's serial, and a timestamp. Read what's on each photo, then strip what you don't want shown, or write your own name and a copyright line in.</p>
-      <p class="pf-exif-empty" id="pfExifEmpty">Add photos above to start.</p>
+      <p class="pf-exif-empty" id="pfExifEmpty">
+        <svg viewBox="0 0 20 20" aria-hidden="true" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3.4" y="5" width="13.2" height="10" rx="1.4"/><circle cx="7.4" cy="8.8" r="1.1"/><path d="m4.6 13.6 3.4-3.2 2.4 2.2 2.5-2.4 3.1 3"/></svg>
+        <strong>No photos yet</strong>
+        <span>Add photos above to read their EXIF and decide what to strip.</span>
+      </p>
       <ul class="pf-exif-list" id="pfExifList" role="list"></ul>
       <div class="pf-exif-actions">
         <button class="button button-light" type="button" id="pfExifReadAll">Read all</button>
