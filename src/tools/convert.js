@@ -964,28 +964,33 @@ async function runOcr(root) {
   if (button) button.disabled = true;
   try {
     const pdfjs = await loadPdfJs();
-    const doc = await pdfjs.getDocument({ data: pdf.data.slice(0), ...pdfjsAssetOptions() }).promise;
+    const doc = await pdfjs.getDocument({ data: pdf.buffer.slice(0), ...pdfjsAssetOptions() }).promise;
     const ranges = parsePageRanges(state.form.ocrPages || 'all', doc.numPages);
     if (!ranges.length) { toast('No pages match that range'); return; }
     const worker = await ensureOcrWorker(root);
     const status = q('#cvOcrStatus', root);
     if (status) status.textContent = `Loaded model — processing ${ranges.length} page${ranges.length === 1 ? '' : 's'}`;
     setOcrProgress(root, 0);
-    // Collect the recognised text per page so the writer can stitch it.
+    // Collect the recognised text + word bboxes per page so the writer can stitch it.
     const pages = [];
     for (let i = 0; i < ranges.length; i += 1) {
       const pageNum = ranges[i];
       if (status) status.textContent = `Recognising page ${i + 1} of ${ranges.length}…`;
-      const { canvas } = await ocrRenderPageToCanvas(doc, pageNum, Number(state.form.ocrDpi) || 300);
-      const { data } = await worker.recognize(canvas);
-      pages.push({ page: pageNum, text: (data.text || '').trim() });
+      const render = await ocrRenderPageToCanvas(doc, pageNum, Number(state.form.ocrDpi) || 300);
+      const { data } = await worker.recognize(render.canvas);
+      pages.push({
+        page: pageNum,
+        text: (data.text || '').trim(),
+        words: collectWords(data),
+        render,
+      });
     }
+    // For the searchable-PDF path we need the per-word bounding boxes, so
+    // re-recognise with the word-level data already returned by the worker.
     if (state.form.ocrOutput === 'text') {
       exportOcrText(pdf, pages);
     } else {
-      // Searchable PDF writer lands in the next commit; for now the run completes.
-      if (status) status.textContent = `Recognised ${pages.length} page${pages.length === 1 ? '' : 's'} — searchable-PDF writer is the next commit.`;
-      toast('OCR ran. The searchable-PDF writer lands in the next commit.');
+      await exportOcrSearchable(pdf, pages, ranges, root);
     }
   } catch (err) {
     console.error('ocr: failed', err);
@@ -1006,4 +1011,75 @@ function exportOcrText(pdf, pages) {
     .join('\n\n---\n\n');
   const blob = new Blob([body + '\n'], { type: 'text/markdown;charset=utf-8' });
   downloadBlob(blob, safeFileName(`${base}-ocr`, 'md'));
+}
+
+/* Walk the recognised page tree and return a flat list of words with
+   bounding boxes in canvas pixel coordinates. The tree is
+   blocks → paragraphs → lines → words. */
+function collectWords(page) {
+  const out = [];
+  if (!page.blocks) return out;
+  for (const block of page.blocks) {
+    if (!block.paragraphs) continue;
+    for (const para of block.paragraphs) {
+      if (!para.lines) continue;
+      for (const line of para.lines) {
+        if (!line.words) continue;
+        for (const word of line.words) {
+          const text = (word.text || '').trim();
+          if (!text) continue;
+          out.push({ text, bbox: word.bbox });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+async function exportOcrSearchable(pdf, pages, ranges, root) {
+  const { PDFDocument, StandardFonts, rgb } = await loadPdfLib();
+  // Load the original with pdf-lib too, so we can copy the original pages
+  // (which are scans / images) into the output.
+  const src = await PDFDocument.load(pdf.buffer.slice(0), { ignoreEncryption: true });
+  const out = await PDFDocument.create();
+  const font = await out.embedFont(StandardFonts.Helvetica);
+  const copied = await out.copyPages(src, ranges.map((n) => n - 1));
+  for (let i = 0; i < copied.length; i += 1) {
+    const page = out.addPage(copied[i]);
+    const meta = pages[i];
+    if (!meta || !meta.words.length) continue;
+    const { width: pdfW, height: pdfH } = page.getSize();
+    // The canvas was rendered at scale = dpi / 72, so canvas pixels to
+    // PDF points is the inverse: pdfPt = canvasPx * (72 / dpi).
+    const scale = 72 / (Number(state.form.ocrDpi) || 300);
+    for (const w of meta.words) {
+      const x = w.bbox.x0 * scale;
+      const yTop = w.bbox.y0 * scale;
+      const wWidth = (w.bbox.x1 - w.bbox.x0) * scale;
+      const wHeight = (w.bbox.y1 - w.bbox.y0) * scale;
+      const fontSize = Math.max(2, wHeight * 0.85);
+      // PDF coords: y0 is the top in canvas → translate to bottom-left origin
+      const yPdf = pdfH - yTop - wHeight;
+      try {
+        page.drawText(w.text, {
+          x: x,
+          y: yPdf + (wHeight - fontSize) / 2,
+          size: fontSize,
+          font,
+          color: rgb(0, 0, 0),
+          opacity: 0, // invisible — search finds it, eyes don't
+        });
+      } catch (err) {
+        // some characters can't be drawn with StandardFonts.Helvetica (e.g. CJK on a
+        // non-CJK model run). Skip the word rather than failing the whole run.
+        continue;
+      }
+    }
+  }
+  const bytes = await out.save();
+  const base = pdf.name.replace(/\.pdf$/i, '');
+  downloadBlob(new Blob([bytes], { type: 'application/pdf' }), safeFileName(`${base}-searchable`, 'pdf'));
+  const status = q('#cvOcrStatus', root);
+  if (status) status.textContent = `Wrote searchable PDF — ${pages.length} page${pages.length === 1 ? '' : 's'}, ${pages.reduce((n, p) => n + p.words.length, 0)} words overlaid.`;
+  toast(`Searchable PDF ready — ${pages.length} page${pages.length === 1 ? '' : 's'}.`);
 }
