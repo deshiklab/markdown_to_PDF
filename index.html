@@ -122,7 +122,21 @@
           document.body.append(notice);
         }
       } else {
-        await import('./src/main.js');
+        try {
+          await import('./src/main.js');
+        } catch (error) {
+          console.error('Folio studio failed to start:', error);
+          const notice = document.createElement('div');
+          notice.className = 'local-setup-notice';
+          const heading = document.createElement('strong');
+          heading.textContent = 'The studio did not load.';
+          const detail = document.createElement('p');
+          detail.textContent = (error && error.message) ? error.message : String(error);
+          const hint = document.createElement('p');
+          hint.textContent = 'Check the browser dev tools console for the full error. Then hard refresh (Cmd/Ctrl+Shift+R).';
+          notice.append(heading, detail, hint);
+          document.body.append(notice);
+        }
       }
     </script>
   </body>
