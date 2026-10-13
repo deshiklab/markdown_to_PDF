@@ -29,6 +29,7 @@ const MODES = [
   { id: 'split', label: 'Split & extract', note: 'Pages out of one file' },
   { id: 'watermark', label: 'Watermark', note: 'Stamp text on pages' },
   { id: 'margins', label: 'Frame & trim', note: 'Real page margins' },
+  { id: 'batch', label: 'Batch rename', note: 'Title → merge or zip' },
 ];
 /* 72 pt to the inch: pdf-lib works in points, the controls in whatever the
    reader thinks in. */
@@ -69,6 +70,8 @@ const state = {
   thumbsReady: false,
   busy: false,
   form: { ...prefs.read() },
+  // batch mode: the list of files in order, with the user-edited names
+  batch: [],
 };
 
 const downloadIcon = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5v8m0 0 3-3m-3 3-3-3M4.5 12.5v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3"/></svg>';
@@ -84,17 +87,22 @@ export function start(root) {
     state.sources = [];
     state.order = [];
     state.thumbsReady = false;
+    state.batch = [];
     render(root);
     toast('Cleared — nothing is kept from those files.');
   });
   q('#labPickMore', root)?.addEventListener('click', async () => {
     const files = await pickFiles({ accept: 'application/pdf,.pdf', multiple: true });
-    await addFiles(files, root);
+    if (state.form.mode === 'batch') await addBatchFiles(files, root);
+    else await addFiles(files, root);
   });
   q('#labMergeGo', root)?.addEventListener('click', () => exportMerge(root));
   q('#labSplitGo', root)?.addEventListener('click', () => exportSplit(root));
   q('#labWatermarkGo', root)?.addEventListener('click', () => exportWatermark(root));
   q('#labMarginGo', root)?.addEventListener('click', () => exportMargins(root));
+  q('#labBatchSort', root)?.addEventListener('click', () => sortBatchByName(root));
+  q('#labBatchMerge', root)?.addEventListener('click', () => exportBatchMerge(root));
+  q('#labBatchZip', root)?.addEventListener('click', () => exportBatchZip(root));
   qa('#labMarginUnits [data-margin-unit]', root).forEach((node) => {
     node.addEventListener('click', () => {
       const from = MM_PER_UNIT[state.form.marginUnit] ?? 1;
@@ -242,6 +250,19 @@ function layout() {
         </div>
         <div class="lab-actions"><span class="lab-hint" id="labWatermarkHint"></span><button class="button button-export" type="button" id="labWatermarkGo">${downloadIcon}<span>Download stamped PDF</span></button></div>
       </div>
+
+      <div class="lab-mode-panel" data-mode-panel="batch" hidden>
+        <p class="lab-help">Drop a folder of PDFs. Folio reads each file's metadata title, lets you rename anything that came through empty, drag the list to set the order, then either merge the lot into one PDF or zip the renamed files.</p>
+        <ul class="lab-merge-list" id="labBatchList" role="list"></ul>
+        <div class="lab-actions">
+          <span class="lab-hint" id="labBatchHint">Drop a few PDFs to begin.</span>
+          <div class="lab-actions-row">
+            <button class="button button-light" type="button" id="labBatchSort">Sort by name</button>
+            <button class="button button-export" type="button" id="labBatchZip">${downloadIcon}<span>Download renamed zip</span></button>
+            <button class="button button-export" type="button" id="labBatchMerge">${downloadIcon}<span>Download merged PDF</span></button>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 </div>`;
@@ -278,7 +299,9 @@ function wireDropzone(root) {
     event.preventDefault();
     depth = 0;
     zone.classList.remove('is-dragging');
-    addFiles(Array.from(event.dataTransfer?.files || []), root);
+    const files = Array.from(event.dataTransfer?.files || []);
+    if (state.form.mode === 'batch') addBatchFiles(files, root);
+    else addFiles(files, root);
   });
 }
 
@@ -365,6 +388,7 @@ function render(root) {
   paintCounts(root);
   paintSplitHint(root);
   paintWatermarkHint(root);
+  paintBatchList(root);
 }
 
 function setMode(mode, root) {
@@ -931,4 +955,144 @@ function save(data, name, pageCount) {
   const blob = new Blob([data], { type: 'application/pdf' });
   downloadBlob(blob, name);
   toast(`${name} is ready — ${pageCount} ${pageCount === 1 ? 'page' : 'pages'}, ${bytes(blob.size)}.`);
+}
+
+/* -------------------------------------------------- batch mode ---- */
+/* "Batch rename & merge" — drop a folder of PDFs, read each file's
+   metadata title, let the user edit and reorder, then either merge in
+   order or zip the renamed files. The foundation commit wires the panel
+   + the list + the title read + drag-to-reorder; the merge and zip
+   exports are the next two commits. */
+
+async function addBatchFiles(files, root) {
+  if (!files || !files.length) return;
+  for (const file of files) {
+    if (!/\.pdf$/i.test(file.name)) continue;
+    try {
+      const buffer = new Uint8Array(await file.arrayBuffer());
+      const { PDFDocument } = await loadPdfLib();
+      const doc = await PDFDocument.load(buffer, { ignoreEncryption: true, updateMetadata: false });
+      const pageCount = doc.getPageCount();
+      if (!pageCount) throw new Error('That PDF has no pages.');
+      const titleMeta = (doc.getTitle() || '').trim();
+      const stem = stripPdf(file.name);
+      const id = `b${state.batch.length + 1}-${Math.random().toString(36).slice(2, 6)}`;
+      state.batch.push({
+        id,
+        name: file.name,
+        size: file.size,
+        buffer,
+        pageCount,
+        titleMeta,
+        newName: titleMeta || stem, // start from the metadata title, fall back to filename stem
+      });
+    } catch (err) {
+      console.error('batch: could not load', file.name, err);
+      toast(`${file.name} could not be opened — it may be encrypted or damaged.`, true);
+    }
+  }
+  paintBatchList(root);
+  paintBatchHint(root);
+}
+
+function paintBatchList(root) {
+  const list = q('#labBatchList', root);
+  if (!list) return;
+  if (state.batch.length === 0) {
+    list.innerHTML = '';
+    return;
+  }
+  list.innerHTML = state.batch.map((b, i) => `
+    <li class="lab-page lab-batch-row" data-i="${i}" draggable="true">
+      <span class="lab-drag" aria-hidden="true"><svg viewBox="0 0 12 20" fill="currentColor"><circle cx="3" cy="5" r="1.25"/><circle cx="9" cy="5" r="1.25"/><circle cx="3" cy="10" r="1.25"/><circle cx="9" cy="10" r="1.25"/><circle cx="3" cy="15" r="1.25"/><circle cx="9" cy="15" r="1.25"/></svg></span>
+      <span class="lab-page-number">${i + 1}</span>
+      <div class="lab-batch-name">
+        <input class="text-input lab-batch-name-input" data-i="${i}" type="text" value="${escapeHtml(b.newName)}" placeholder="${escapeHtml(b.titleMeta || 'no title — type one')}" autocomplete="off" />
+        <div class="lab-batch-meta">
+          <span class="lab-batch-from">from <code>${escapeHtml(b.name)}</code></span>
+          ${b.titleMeta ? `<span class="lab-batch-tag">title: ${escapeHtml(b.titleMeta)}</span>` : `<span class="lab-batch-tag is-warn">no title in metadata</span>`}
+          <span class="lab-batch-tag">${b.pageCount} ${b.pageCount === 1 ? 'page' : 'pages'}</span>
+        </div>
+      </div>
+      <button class="lab-icon-button" data-act="up" data-i="${i}" aria-label="Move up" title="Move up"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5-5 5 5"/></svg></button>
+      <button class="lab-icon-button" data-act="down" data-i="${i}" aria-label="Move down" title="Move down"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 5 5 5-5"/></svg></button>
+      <button class="lab-icon-button" data-act="remove" data-i="${i}" aria-label="Remove" title="Remove"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l8 8M14 6l-8 8"/></svg></button>
+    </li>
+  `).join('');
+  // wire inputs
+  qa('.lab-batch-name-input', list).forEach((inp) => {
+    inp.addEventListener('input', (e) => {
+      const i = Number(e.target.dataset.i);
+      state.batch[i].newName = e.target.value;
+    });
+  });
+  qa('.lab-icon-button', list).forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const i = Number(e.currentTarget.dataset.i);
+      const act = e.currentTarget.dataset.act;
+      if (act === 'remove') {
+        state.batch.splice(i, 1);
+      } else if (act === 'up' && i > 0) {
+        [state.batch[i - 1], state.batch[i]] = [state.batch[i], state.batch[i - 1]];
+      } else if (act === 'down' && i < state.batch.length - 1) {
+        [state.batch[i + 1], state.batch[i]] = [state.batch[i], state.batch[i + 1]];
+      }
+      paintBatchList(root);
+      paintBatchHint(root);
+    });
+  });
+  // drag-to-reorder (same pattern as paintMergeList)
+  qa('.lab-batch-row', list).forEach((item) => {
+    const index = Number(item.dataset.i);
+    item.addEventListener('dragstart', (e) => {
+      item.classList.add('is-dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(index));
+    });
+    item.addEventListener('dragend', () => {
+      item.classList.remove('is-dragging');
+      qa('.is-over', list).forEach((n) => n.classList.remove('is-over'));
+    });
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      item.classList.add('is-over');
+    });
+    item.addEventListener('dragleave', () => item.classList.remove('is-over'));
+    item.addEventListener('drop', (e) => {
+      e.preventDefault();
+      item.classList.remove('is-over');
+      const from = Number(e.dataTransfer.getData('text/plain'));
+      if (!Number.isFinite(from) || from === index) return;
+      const [moved] = state.batch.splice(from, 1);
+      state.batch.splice(index, 0, moved);
+      paintBatchList(root);
+    });
+  });
+}
+
+function paintBatchHint(root) {
+  const hint = q('#labBatchHint', root);
+  if (!hint) return;
+  if (state.batch.length === 0) {
+    hint.textContent = 'Drop a few PDFs to begin.';
+  } else {
+    const total = state.batch.reduce((n, b) => n + b.pageCount, 0);
+    hint.textContent = `${state.batch.length} ${state.batch.length === 1 ? 'file' : 'files'} · ${total} ${total === 1 ? 'page' : 'pages'} total. Drag to set the order.`;
+  }
+}
+
+function sortBatchByName(root) {
+  state.batch.sort((a, b) => a.newName.localeCompare(b.newName, undefined, { numeric: true, sensitivity: 'base' }));
+  paintBatchList(root);
+  paintBatchHint(root);
+}
+
+async function exportBatchMerge(root) {
+  if (state.batch.length === 0) { toast('Drop a few PDFs first'); return; }
+  toast('Merge writer is the next commit.');
+}
+async function exportBatchZip(root) {
+  if (state.batch.length === 0) { toast('Drop a few PDFs first'); return; }
+  toast('Zip writer is the next commit.');
 }

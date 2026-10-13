@@ -479,6 +479,14 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 .lab-page.is-dragging { opacity: .45; }
 .lab-page.is-over { border-color: var(--green); box-shadow: 0 0 0 2px rgba(72, 121, 91, .14); }
 .lab-page.is-skipped { opacity: .55; background: #f7f7f3; }
+/* Batch rename list — same drag handles, different content (file + name input) */
+.lab-batch-row { grid-template-columns: 18px 28px minmax(0, 1fr) auto auto auto; gap: 10px; }
+.lab-batch-name { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.lab-batch-name-input { width: 100%; height: 26px; font-size: 11px; }
+.lab-batch-meta { display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 9px; color: #6a7064; }
+.lab-batch-meta code { font-family: var(--mono); font-size: 9px; color: #4a5044; background: #ecedde; padding: 1px 5px; border-radius: 3px; }
+.lab-batch-tag { padding: 1px 6px; border-radius: 3px; background: #e9e6d8; color: #6a7064; }
+.lab-batch-tag.is-warn { background: #f3e2c4; color: #8a6a3a; }
 .lab-drag { color: #c3cabd; cursor: grab; }
 .lab-drag svg { display: block; width: 11px; height: 18px; }
 .lab-page-number { color: #666c64; font-family: var(--mono); font-size: 9px; text-align: right; }
