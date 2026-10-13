@@ -119,9 +119,8 @@ function layout() {
           <label class="field grow"><span class="field-label">Artist</span><input class="text-input" id="pfExifArtist" type="text" value="${escapeHtml(form.exifArtist)}" placeholder="Your name" autocomplete="off" /></label>
           <label class="field"><span class="field-label">Copyright</span><input class="text-input text-input-narrow" id="pfExifCopyright" type="text" value="${escapeHtml(form.exifCopyright)}" placeholder="© 2026" autocomplete="off" /></label>
         </div>
-        <label class="field"><span class="field-label">Description</span><textarea class="tr-paste" id="pfExifDescription" rows="2" placeholder="A line of caption">${escapeHtml(form.exifDescription ?? '')}</textarea></label>
-        <div class="lab-actions">
-          <span></span>
+        <label class="field"><span class="field-label">Description</span><textarea class="pf-exif-textarea" id="pfExifDescription" rows="2" placeholder="A line of caption">${escapeHtml(form.exifDescription ?? '')}</textarea></label>
+        <div class="lab-actions pf-exif-write-actions">
           <button class="button button-light" type="button" id="pfExifWrite">Write to all photos</button>
         </div>
       </details>

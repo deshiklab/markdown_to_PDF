@@ -1173,9 +1173,10 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 .pf-exif-count { font-family: var(--mono, monospace); font-size: 9px; color: #6a7064; background: transparent; padding: 0; white-space: nowrap; }
 .pf-exif-count.is-warn { color: #8a6a3a; }
 .pf-exif-list { display: grid; gap: 6px; max-height: 320px; overflow: auto; padding: 0; margin: 0; list-style: none; }
+.pf-exif-list, .pf-exif-list > li { list-style: none; list-style-type: none; list-style-position: inside; padding: 0; margin: 0; }
 .pf-exif-list:empty { display: none; }
 .pf-exif-list:empty + .pf-exif-actions { display: none; }
-.pf-exif-row { border: 1px solid #e8e9e1; border-radius: 11px; background: #fffdfa; padding: 8px 10px; display: grid; gap: 4px; }
+.pf-exif-row { border: 1px solid #e8e9e1; border-radius: 11px; background: #fffdfa; padding: 8px 10px; display: grid; gap: 4px; font-size: 11px; line-height: 1.4; }
 .pf-exif-row.is-stripped { border-color: #cdd8c9; background: #f0f6ec; }
 .pf-exif-row.is-written { border-color: #d6c8a8; background: #fbf6e9; }
 .pf-exif-head-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -1191,8 +1192,14 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 .pf-exif-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .pf-exif-actions .button { flex: 1 1 auto; min-width: 0; justify-content: center; }
 .pf-exif-empty { margin: 4px 0 0; padding: 18px 8px; border: 1px dashed #dde2d6; border-radius: 11px; background: #fbfbf3; min-height: 0; }
+.pf-exif-textarea { display: block; width: 100%; min-height: 0; height: auto; padding: 8px 10px; border: 1px solid #e2e5dc; border-radius: 7px; color: #3d4a42; background: #fcfcf9; font-family: var(--mono); font-size: 11px; line-height: 1.5; resize: vertical; }
 .pf-exif-empty svg { width: 32px; height: 32px; margin-bottom: 10px; color: #a6b39e; }
 .pf-exif-write { border-top: 1px solid #e8e9e1; margin: 4px 0 0; padding: 10px 0 0; }
-.pf-exif-write summary { font-size: 9.5px; color: #697068; cursor: pointer; padding: 2px 0; }
-.pf-exif-write[open] summary { color: #292e23; }
-.pf-exif-write[open] summary strong { font-weight: 700; }
+.pf-exif-write > summary { font-size: 9.5px; color: #697068; cursor: pointer; padding: 2px 0; list-style: none; }
+.pf-exif-write > summary::-webkit-details-marker { display: none; }
+.pf-exif-write[open] > summary { color: #292e23; font-weight: 600; }
+.pf-exif-write[open] > summary strong { font-weight: 700; }
+.pf-exif-write .lab-row { gap: 8px; }
+.pf-exif-write .field { font-size: 10px; }
+.pf-exif-write-actions { justify-content: stretch; }
+.pf-exif-write-actions .button { width: 100%; }
