@@ -3,7 +3,7 @@
 import { el, q, qa, store } from './lib.js';
 import { mountControls, printSheet } from './page.js';
 
-const TOOL_IDS = ['markdown', 'pdf-lab', 'translate', 'convert', 'portfolio', 'finish', 'sign'];
+const TOOL_IDS = ['markdown', 'pdf-lab', 'translate', 'convert', 'portfolio', 'finish', 'forms', 'sign'];
 const LABELS = {
   markdown: 'Markdown to PDF',
   'pdf-lab': 'PDF Lab',
@@ -11,6 +11,7 @@ const LABELS = {
   convert: 'Converter',
   portfolio: 'Photo Portfolio',
   finish: 'Finish',
+  forms: 'Forms',
   sign: 'Sign',
 };
 
@@ -44,6 +45,11 @@ const INTRO = {
     eyebrow: 'Finish',
     title: 'The last pass<br /><em>before it goes out.</em>',
     note: 'Set the document fields, stamp page numbers where a footer belongs, black out what must not be read, and take a checksum of the exact bytes you are sending.',
+  },
+  forms: {
+    eyebrow: 'Forms',
+    title: 'Add, read, fill<br /><em>the answers.</em>',
+    note: 'Drop a flat PDF and place text inputs, checkboxes, radio groups and dropdowns on the page. Or open a PDF that already has fields and read or fill the answers — then save.',
   },
   sign: {
     eyebrow: 'Sign',
