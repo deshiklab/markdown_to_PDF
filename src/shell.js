@@ -48,8 +48,8 @@ const INTRO = {
   },
   forms: {
     eyebrow: 'Forms',
-    title: 'Add, read, fill<br /><em>the answers.</em>',
-    note: 'Drop a flat PDF and place text inputs, checkboxes, radio groups and dropdowns on the page. Or open a PDF that already has fields and read or fill the answers — then save.',
+    title: 'Drop a flat PDF,<br /><em>ship the answers.</em>',
+    note: 'Fill a PDF\'s fields and flatten the answers into the page — no reader required. Or add fields to a flat document, or read the answers out as JSON or CSV.',
   },
   sign: {
     eyebrow: 'Sign',
