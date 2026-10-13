@@ -1100,4 +1100,28 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
   .tool-panel .pf-page { width: min(100%, 297mm) !important; margin: 0 auto !important; border: 0 !important; box-shadow: none !important; break-after: page; }
   .document-content { break-inside: auto; }
   .document-content h1, .document-content h2, .document-content h3, .document-content blockquote, .document-content table, .document-content pre, .document-content img { break-inside: avoid; }
+
+/* ---------------------------------------------------------------- forms ---- */
+/* The Forms tab re-uses the Finish tab's shell (`fn-shell`, `fn-side`,
+   `fn-main`, `fn-stage`, `lab-modes`, `lab-row`, `lab-actions`) so it stays
+   in lockstep with the rest of the studio. The few extras below are only
+   for form-field-specific UI: the type picker, the read/fill lists, and
+   the checkbox-with-label row. */
+.fm-add-bar { align-items: flex-end; }
+.fm-add-bar .field { flex: 1 1 110px; }
+.fm-add-bar .field.grow { flex: 1 1 220px; }
+.fm-check { flex-direction: row; align-items: center; gap: 9px; cursor: pointer; }
+.fm-check input[type="checkbox"] { width: 14px; height: 14px; margin: 0; accent-color: var(--accent, #3a5a40); }
+.fm-check span { font-size: 10px; color: var(--ink, #292e23); }
+.fm-read-list, .fm-fill-list { display: grid; gap: 6px; max-height: 360px; overflow: auto; padding: 4px 2px; border: 1px dashed var(--line, #d8d3c2); border-radius: 8px; background: rgba(255,255,255,.4); }
+.fm-read-list:empty::before, .fm-fill-list:empty::before { content: "no fields yet"; color: #8a8e80; font-size: 10px; padding: 14px; }
+.fm-read-row, .fm-fill-row { display: grid; grid-template-columns: 80px 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--line, #d8d3c2); border-radius: 6px; background: #fcfbf7; }
+.fm-read-row .fm-kind { font-size: 9px; text-transform: uppercase; letter-spacing: .8px; color: #6a7064; padding: 2px 6px; border-radius: 4px; background: #e9e6d8; }
+.fm-read-row .fm-name { font-family: var(--font-mono, monospace); font-size: 11px; color: #292e23; word-break: break-all; }
+.fm-read-row .fm-value { font-size: 11px; color: #292e23; word-break: break-word; }
+.fm-read-row .fm-page { font-size: 9px; color: #8a8e80; }
+.fm-fill-row .text-input { width: 100%; }
+.fm-fill-row .fm-fill-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.fm-fill-row .fm-fill-options label { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; }
+.fm-fill-row .fm-fill-options input { margin: 0; }
 }
