@@ -9,6 +9,7 @@ import {
   el,
   emptyState,
   escapeHtml,
+  flattenPdfPages,
   hasFiles,
   loadPdfJs,
   loadPdfLib,
@@ -803,51 +804,7 @@ async function blackOut(root) {
 }
 
 async function flattenPages(pdfBytes, pageIndexes) {
-  const { PDFDocument } = await loadPdfLib();
-  const pdfjs = await loadPdfJs();
-  const src = await PDFDocument.load(pdfBytes, { ignoreEncryption: true, updateMetadata: false });
-  const view = await pdfjs.getDocument({ data: pdfBytes.slice(0), isEvalSupported: false }).promise;
-  const flat = new Set(pageIndexes);
-  const out = await PDFDocument.create();
-  for (const [get, set] of [['getTitle', 'setTitle'], ['getAuthor', 'setAuthor'], ['getSubject', 'setSubject'], ['getCreator', 'setCreator'], ['getProducer', 'setProducer']]) {
-    const value = src[get]();
-    if (value) out[set](value);
-  }
-  const keywords = src.getKeywords();
-  if (keywords) out.setKeywords(String(keywords).split(',').map((word) => word.trim()).filter(Boolean));
-  for (const [get, set] of [['getCreationDate', 'setCreationDate'], ['getModificationDate', 'setModificationDate']]) {
-    const date = src[get]();
-    if (date) out[set](date);
-  }
-  for (let index = 0; index < src.getPageCount(); index += 1) {
-    if (!flat.has(index)) {
-      const [copied] = await out.copyPages(src, [index]);
-      out.addPage(copied);
-      continue;
-    }
-    const page = await view.getPage(index + 1);
-    const base = page.getViewport({ scale: 1 });
-    const scale = Math.min(3, Math.max(2, 1600 / base.width));
-    const viewport = page.getViewport({ scale });
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(viewport.width);
-    canvas.height = Math.round(viewport.height);
-    const context = canvas.getContext('2d');
-    context.fillStyle = '#ffffff';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    await page.render({ canvasContext: context, viewport }).promise;
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
-    const binary = atob(dataUrl.split(',')[1]);
-    const raw = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) raw[i] = binary.charCodeAt(i);
-    const image = await out.embedJpg(raw);
-    const size = src.getPage(index).getSize();
-    const newPage = out.addPage([size.width, size.height]);
-    newPage.drawImage(image, { x: 0, y: 0, width: size.width, height: size.height });
-    page.cleanup();
-  }
-  await view.destroy();
-  return out.save({ useObjectStreams: false });
+  return flattenPdfPages(pdfBytes, pageIndexes);
 }
 
 /* ------------------------------------------------------------- checksum ---- */
