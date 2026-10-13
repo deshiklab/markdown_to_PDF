@@ -76,7 +76,7 @@ kbd { display: inline-grid; place-items: center; min-width: 19px; height: 19px; 
 .workbench { display: grid; grid-template-columns: minmax(0, .94fr) minmax(0, 1.06fr); align-items: stretch; gap: 17px; }
 .panel { overflow: hidden; min-width: 0; border: 1px solid #e8e8e1; border-radius: 13px; background: #fff; box-shadow: 0 4px 16px rgba(49, 54, 41, .035); }
 .editor-panel, .preview-panel { display: flex; flex-direction: column; }
-.panel-header { display: flex; align-items: center; justify-content: space-between; min-height: 70px; padding: 0 20px; }
+.panel-header { display: flex; align-items: center; justify-content: space-between; min-height: 58px; padding: 0 20px; }
 .editor-header { border-bottom: 1px solid #eeeee8; }
 .panel-title-group { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .panel-index { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; border: 1px solid #e4e7dd; border-radius: 9px; color: #70806c; background: #f4f6ef; font-family: var(--mono); font-size: 10px; }
@@ -92,7 +92,7 @@ kbd { display: inline-grid; place-items: center; min-width: 19px; height: 19px; 
 .button-text { height: 30px; padding: 0 5px; color: #7e867d; background: transparent; font-size: 10px; font-weight: 600; }
 .button-text:hover { color: #42674d; }
 
-.editor-toolbar { display: flex; align-items: center; gap: 2px; height: 41px; padding: 0 14px; border-bottom: 1px solid #f0f0eb; background: #fff; }
+.editor-toolbar { display: flex; align-items: center; gap: 2px; height: 38px; padding: 0 14px; border-bottom: 1px solid #f0f0eb; background: #fff; }
 .format-button { display: grid; place-items: center; width: 28px; height: 27px; border: 0; border-radius: 5px; color: #858b82; background: transparent; cursor: pointer; font-family: var(--mono); font-size: 12px; transition: color .15s, background .15s; }
 .format-button:hover { color: #3f6b4f; background: #f1f5ed; }
 .format-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
@@ -106,7 +106,7 @@ kbd { display: inline-grid; place-items: center; min-width: 19px; height: 19px; 
 #markdownInput { display: block; width: 100%; height: 100%; resize: none; overflow: auto; padding: 24px 22px 26px 17px; border: 0; outline: none; color: #48544c; background: transparent; font-family: var(--mono); font-size: 11px; line-height: 22px; letter-spacing: -.1px; tab-size: 2; white-space: pre; }
 #markdownInput::placeholder { color: #a1a79d; }
 #markdownInput:focus-visible { outline: none; }
-.editor-footer { display: flex; align-items: center; justify-content: space-between; min-height: 38px; padding: 0 17px; border-top: 1px solid #eeeee9; background: #fff; color: #92978e; font-size: 9px; }
+.editor-footer { display: flex; align-items: center; justify-content: space-between; min-height: 34px; padding: 0 17px; border-top: 1px solid #eeeee9; background: #fff; color: #92978e; font-size: 9px; }
 .file-state { display: flex; align-items: center; gap: 7px; min-width: 0; }
 #fileName { max-width: 190px; overflow: hidden; color: #667268; font-family: var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .file-dot { width: 6px; height: 6px; border-radius: 50%; background: #9aae84; }
@@ -122,19 +122,19 @@ kbd { display: inline-grid; place-items: center; min-width: 19px; height: 19px; 
 .drop-overlay strong { font-size: 15px; }
 .drop-overlay > span:last-child { color: #839183; font-size: 11px; }
 
-.preview-header { min-height: 70px; padding-right: 17px; }
+.preview-header { min-height: 58px; padding-right: 17px; }
 .live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #75a875; box-shadow: 0 0 0 3px #edf5eb; }
-.button-export { height: 35px; min-width: 137px; padding: 0 13px; color: white; background: #315f50; font-size: 10px; font-weight: 700; box-shadow: 0 3px 7px rgba(45, 91, 72, .12); }
+.button-export { height: 32px; min-width: 137px; padding: 0 13px; color: white; background: #315f50; font-size: 10px; font-weight: 700; box-shadow: 0 3px 7px rgba(45, 91, 72, .12); }
 .button-export:hover { background: #274f41; box-shadow: 0 4px 10px rgba(45, 91, 72, .2); }
 .button-export:disabled { cursor: wait; opacity: .82; }
 .button-export svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .export-spinner { width: 13px; height: 13px; border: 1.5px solid rgba(255,255,255,.45); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.preview-controls { display: flex; align-items: center; gap: 11px; min-height: 53px; padding: 0 19px; border-top: 1px solid #f0f0eb; border-bottom: 1px solid #e8e9e2; background: #fff; }
-.select-control { position: relative; display: flex; flex-direction: column; justify-content: center; min-width: 90px; height: 38px; padding-right: 17px; }
-.select-control > span:first-child { display: block; margin-bottom: 1px; color: #a0a59c; font-size: 7px; font-weight: 700; letter-spacing: 1px; }
-.select-control select { appearance: none; width: 100%; min-width: 68px; padding: 0 1px; border: 0; outline: 0; color: #536054; background: transparent; cursor: pointer; font-size: 10px; font-weight: 600; }
-.select-control > svg { position: absolute; right: 0; bottom: 9px; width: 12px; height: 12px; fill: none; stroke: #929a91; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.preview-controls { display: flex; align-items: center; gap: 11px; min-height: 40px; padding: 4px 19px; border-top: 1px solid #f0f0eb; border-bottom: 1px solid #e8e9e2; background: #fff; }
+.select-control { position: relative; display: flex; flex-direction: column; justify-content: center; min-width: 88px; height: 28px; padding-right: 15px; }
+.select-control > span:first-child { display: block; margin-bottom: -1px; color: #a0a59c; font-size: 7px; font-weight: 700; letter-spacing: 1px; }
+.select-control select { appearance: none; width: 100%; min-width: 68px; padding: 0 1px; border: 0; outline: 0; color: #536054; background: transparent; cursor: pointer; font-size: 10px; font-weight: 600; line-height: 1.1; }
+.select-control > svg { position: absolute; right: 0; bottom: 6px; width: 11px; height: 11px; fill: none; stroke: #929a91; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
 .select-control-paper { min-width: 71px; }
 .select-control-paper select { min-width: 51px; }
 .select-control-orientation { min-width: 101px; }
@@ -184,7 +184,7 @@ kbd { display: inline-grid; place-items: center; min-width: 19px; height: 19px; 
 .empty-preview svg { width: 48px; height: 48px; margin-bottom: 15px; color: #a6b39e; }
 .empty-preview strong { margin-bottom: 5px; color: #687769; font-size: 13px; }
 .empty-preview span { font-size: 10px; }
-.preview-footer { display: flex; align-items: center; justify-content: space-between; min-height: 34px; padding: 0 18px; border-top: 1px solid #edeee8; color: #9a9e96; background: #fff; font-size: 9px; }
+.preview-footer { display: flex; align-items: center; justify-content: space-between; min-height: 32px; padding: 0 18px; border-top: 1px solid #edeee8; color: #9a9e96; background: #fff; font-size: 9px; }
 .preview-footer > span { display: inline-flex; align-items: center; gap: 7px; }
 .preview-footer svg { width: 14px; height: 14px; fill: none; stroke: #91a08d; stroke-width: 1.15; stroke-linejoin: round; stroke-linecap: round; }
 .drop-help { display: flex; align-items: center; gap: 6px; margin: 12px 2px 0; color: #90978c; font-size: 10px; }
@@ -268,7 +268,7 @@ kbd { display: inline-grid; place-items: center; min-width: 19px; height: 19px; 
   .shortcut-hint kbd { min-width: 17px; height: 17px; font-size: 9px; }
   .workbench { gap: 13px; }
   .panel { border-radius: 11px; }
-  .panel-header { min-height: 64px; padding: 0 12px; }
+  .panel-header { min-height: 54px; padding: 0 12px; }
   .panel-title-group { gap: 9px; }
   .panel-index { width: 27px; height: 27px; flex-basis: 27px; border-radius: 8px; font-size: 9px; }
   .panel-title-group h3 { font-size: 11px; }
@@ -277,19 +277,19 @@ kbd { display: inline-grid; place-items: center; min-width: 19px; height: 19px; 
   .button-light { height: 29px; padding: 0 7px; font-size: 9px; }
   .button-light svg { width: 13px; height: 13px; }
   .button-text { padding: 0 3px; font-size: 9px; }
-  .editor-toolbar { height: 38px; padding: 0 10px; }
+  .editor-toolbar { height: 36px; padding: 0 10px; }
   .format-button { width: 27px; height: 26px; }
   .editor-wrap { grid-template-columns: 39px minmax(0, 1fr); height: 380px; min-height: 340px; }
   .line-gutter { padding-right: 9px; font-size: 10px; line-height: 21px; }
   #markdownInput { padding: 24px 13px 24px 13px; font-size: 10px; line-height: 21px; }
-  .editor-footer { min-height: 35px; padding: 0 11px; font-size: 8px; }
+  .editor-footer { min-height: 32px; padding: 0 11px; font-size: 8px; }
   #fileName { max-width: 135px; }
   .autosave-status span { display: none; }
   .preview-header { padding-right: 10px; }
-  .button-export { min-width: 111px; height: 32px; padding: 0 9px; font-size: 9px; }
+  .button-export { min-width: 111px; height: 29px; padding: 0 9px; font-size: 9px; }
   .button-export svg { width: 14px; height: 14px; }
-  .preview-controls { display: flex; flex-wrap: wrap; min-height: 82px; gap: 0 12px; padding: 3px 12px; }
-  .select-control { flex: 0 0 calc(50% - 6px); min-width: 0; height: 36px; padding-right: 13px; }
+  .preview-controls { display: flex; flex-wrap: wrap; min-height: 64px; gap: 2px 12px; padding: 3px 12px; }
+  .select-control { flex: 0 0 calc(50% - 6px); min-width: 0; height: 28px; padding-right: 13px; }
   .select-control > span:first-child { font-size: 6px; }
   .select-control select { width: 100%; min-width: 0; font-size: 9px; }
   .select-control > svg { width: 10px; height: 10px; bottom: 8px; }
@@ -303,7 +303,7 @@ kbd { display: inline-grid; place-items: center; min-width: 19px; height: 19px; 
   .document-content h1 { font-size: 25px; }
   .document-content h2 { font-size: 17px; }
   .document-content blockquote { font-size: 13px; }
-  .preview-footer { min-height: 32px; padding: 0 10px; font-size: 8px; }
+  .preview-footer { min-height: 30px; padding: 0 10px; font-size: 8px; }
   .drop-help { align-items: flex-start; font-size: 9px; line-height: 1.5; }
   .how-section { display: block; margin: 63px 0 55px; padding-top: 26px; }
   .how-title-block h2 { max-width: none; margin: 7px 0 23px; font-size: 25px; }
