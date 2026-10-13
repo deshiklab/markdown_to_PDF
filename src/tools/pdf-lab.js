@@ -1234,8 +1234,20 @@ function countNestedBookmarks(items) {
 }
 
 async function exportBookmarkJson(root) {
+  const source = activeSource(root, 'bookmarkSource');
+  if (!source) { toast('Pick a source file first'); return; }
   if (!state.bookmarks.length) { toast('Read the outline first'); return; }
-  toast('Outline export is the next commit.');
+  const payload = {
+    source: source.name,
+    pageCount: source.pageCount,
+    exportedAt: new Date().toISOString(),
+    outline: state.bookmarks,
+  };
+  const json = JSON.stringify(payload, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  downloadBlob(blob, safeFileName(`${stripPdf(source.name)}-outline`, 'json'));
+  const total = state.bookmarks.length + countNestedBookmarks(state.bookmarks);
+  toast(`Outline saved — ${state.bookmarks.length} top-level, ${total} total.`);
 }
 async function splitByBookmark(root) {
   if (!state.bookmarks.length) { toast('Read the outline first'); return; }
