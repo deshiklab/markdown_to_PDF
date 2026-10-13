@@ -132,9 +132,18 @@
           heading.textContent = 'The studio did not load.';
           const detail = document.createElement('p');
           detail.textContent = (error && error.message) ? error.message : String(error);
+          notice.append(heading, detail);
+          // Surface the stack so the user can paste it back without
+          // having to open dev tools.
+          if (error && error.stack) {
+            const stack = document.createElement('pre');
+            stack.style.cssText = 'white-space: pre-wrap; word-break: break-word; margin-top: 12px; padding: 10px 12px; background: rgba(0,0,0,0.04); border-radius: 8px; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; line-height: 1.5; max-height: 220px; overflow: auto;';
+            stack.textContent = error.stack;
+            notice.append(stack);
+          }
           const hint = document.createElement('p');
-          hint.textContent = 'Check the browser dev tools console for the full error. Then hard refresh (Cmd/Ctrl+Shift+R).';
-          notice.append(heading, detail, hint);
+          hint.textContent = 'Hard refresh (Cmd/Ctrl+Shift+R) after any change. The block above is the JS error and where it happened.';
+          notice.append(hint);
           document.body.append(notice);
         }
       }
