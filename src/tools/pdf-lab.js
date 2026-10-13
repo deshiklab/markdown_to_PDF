@@ -338,7 +338,18 @@ function layout() {
 
 function wireDropzone(root) {
   const zone = q('#labDrop', root);
-  const open = () => pickFiles({ accept: 'application/pdf,.pdf', multiple: true }).then((files) => addFiles(files, root));
+  const open = () => {
+    pickFiles({ accept: 'application/pdf,.pdf', multiple: true })
+      .then((files) => {
+        if (!files || !files.length) return;
+        if (state.form.mode === 'batch') return addBatchFiles(files, root);
+        return addFiles(files, root);
+      })
+      .catch((error) => {
+        console.error('PDF Lab: file picker failed', error);
+        toast('The file picker could not be opened — try the “Add more” button.', true);
+      });
+  };
   zone.addEventListener('click', open);
   zone.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -406,7 +417,12 @@ async function addFiles(files, root) {
       toast(`${file.name} could not be opened — it may be encrypted or damaged.`, true);
     }
   }
-  render(root);
+  try {
+    render(root);
+  } catch (err) {
+    console.error('PDF Lab: render after addFiles failed', err);
+    toast('The file was added but the panel could not be repainted. Try Clear and upload again.', true);
+  }
   loadThumbs(root).catch((error) => console.warn('Thumbnails skipped:', error));
 }
 

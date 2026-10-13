@@ -82,17 +82,49 @@ export function safeFileName(name, extension) {
   return `${cleaned || 'document'}.${extension}`;
 }
 
-/** Opens the native picker without a visible trigger button. */
+/** Opens the native picker without a visible trigger button. Reuses a
+   single hidden <input> between calls so we never race the file picker
+   (some browsers cancel `change` if the input is removed too early)
+   and so a hard refresh of the same input doesn't accumulate
+   detached DOM nodes. */
+let pickInput = null;
+let pickPromise = null;
 export function pickFiles({ accept = '', multiple = true } = {}) {
-  return new Promise((resolve) => {
-    const input = el('input', { type: 'file', accept, multiple, hidden: true });
-    input.addEventListener('change', () => {
-      resolve(Array.from(input.files || []));
-      input.remove();
-    });
-    document.body.append(input);
-    input.click();
+  /* If a previous picker is still open, await it first so we don't lose
+     the change event of the older input. */
+  const previous = pickPromise;
+  const next = new Promise((resolve, reject) => {
+    const start = () => {
+      if (!pickInput || !pickInput.isConnected) {
+        pickInput = el('input', { type: 'file', accept, multiple, hidden: true });
+        pickInput.style.position = 'fixed';
+        pickInput.style.left = '-9999px';
+        pickInput.style.top = '0';
+        document.body.append(pickInput);
+      } else {
+        pickInput.accept = accept;
+        pickInput.multiple = multiple;
+      }
+      const handle = () => {
+        pickInput.removeEventListener('change', handle);
+        const files = Array.from(pickInput.files || []);
+        resolve(files);
+      };
+      pickInput.addEventListener('change', handle);
+      pickInput.addEventListener('cancel', handle);
+      try {
+        pickInput.click();
+      } catch (err) {
+        pickInput.removeEventListener('change', handle);
+        pickInput.removeEventListener('cancel', handle);
+        reject(err);
+      }
+    };
+    if (previous) previous.then(start, start);
+    else start();
   });
+  pickPromise = next;
+  return next;
 }
 
 /* Keep drop zones honest: only react when real files are dragged. */
