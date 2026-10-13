@@ -1250,8 +1250,47 @@ async function exportBookmarkJson(root) {
   toast(`Outline saved — ${state.bookmarks.length} top-level, ${total} total.`);
 }
 async function splitByBookmark(root) {
-  if (!state.bookmarks.length) { toast('Read the outline first'); return; }
-  toast('Split by bookmark is the next commit.');
+  await withBusy(root, '#labBookmarkSplit', 'Splitting…', async () => {
+    const source = activeSource(root, 'bookmarkSource');
+    if (!source) throw new Error('Pick a source file first.');
+    if (!state.bookmarks.length) throw new Error('Read the outline first.');
+    /* Build the chunk ranges: from each top-level bookmark's page to the
+       next top-level bookmark's page (exclusive), or to the very last
+       page for the final chunk. Bookmarks whose page we could not resolve
+       (url-only or unresolved ref) are skipped — we only have one source
+       and cannot invent their start. */
+    const sourcePageCount = source.pageCount;
+    const resolved = state.bookmarks
+      .map((node, index) => ({ node, index, page: node.page || null }))
+      .filter((entry) => entry.page && entry.page >= 1 && entry.page <= sourcePageCount)
+      .sort((a, b) => a.page - b.page);
+    if (!resolved.length) throw new Error('No top-level bookmarks have a page I can split on.');
+    const chunks = resolved.map((entry, i) => {
+      const start = entry.page;
+      const end = i + 1 < resolved.length ? Math.max(start, resolved[i + 1].page - 1) : sourcePageCount;
+      return { start, end, title: entry.node.title };
+    });
+    const { PDFDocument } = await loadPdfLib();
+    const base = await PDFDocument.load(source.buffer.slice(0), { ignoreEncryption: true });
+    const files = [];
+    for (const chunk of chunks) {
+      const out = await PDFDocument.create();
+      out.setCreator('Folio · PDF Lab');
+      out.setTitle(chunk.title);
+      const indexes = indexesOf(chunk);
+      (await out.copyPages(base, indexes)).forEach((page) => out.addPage(page));
+      files.push({
+        name: safeFileName(`${stripPdf(source.name)}-${String(chunk.start).padStart(3, '0')}-${String(chunk.end).padStart(3, '0')}-${chunk.title}`, 'pdf'),
+        data: new Uint8Array(await out.save({ useObjectStreams: true })),
+      });
+    }
+    if (files.length === 1) save(files[0].data, files[0].name, chunks[0].end - chunks[0].start + 1);
+    else {
+      const blob = await makeZip(Object.fromEntries(files.map((file) => [file.name, file.data])));
+      downloadBlob(blob, safeFileName(`${stripPdf(source.name)}-by-bookmark`, 'zip'));
+      toast(`${files.length} PDFs zipped — one per top-level bookmark.`);
+    }
+  });
 }
 async function rewriteLinks(root) {
   if (!state.bookmarks.length) { toast('Read the outline first'); return; }
