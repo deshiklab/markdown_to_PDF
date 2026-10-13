@@ -287,6 +287,116 @@ export async function flattenPdfPages(pdfBytes, pageIndexes) {
   return out.save({ useObjectStreams: false });
 }
 
+/* Scan a PDF for occurrences of one or more literal terms in the text
+   layer, returning a flat list of matches with page-relative rectangle
+   geometry suitable for drawing an overlay on each page. The same
+   engine powers Finish's Black out panel and PDF Lab's Remove
+   watermark mode, so the matching rules — "ignore case" and "whole
+   words only" — and the geometry — char-precise rectangles, padded
+   by `pad` (PDF points) when the caller draws the box — are
+   shared. */
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function groupTextLines(items) {
+  const lines = [];
+  let current = [];
+  let lastY = null;
+  for (const item of items) {
+    const y = item.transform[5];
+    if (lastY !== null && Math.abs(y - lastY) > Math.max(2, (item.height || 10) * 0.45)) {
+      if (current.length) lines.push(current);
+      current = [];
+    }
+    current.push(item);
+    lastY = y;
+    if (item.hasEOL) {
+      if (current.length) lines.push(current);
+      current = [];
+      lastY = null;
+    }
+  }
+  if (current.length) lines.push(current);
+  return lines;
+}
+
+function charRectForMatch(item, span, from, to) {
+  const x = item.transform[4];
+  const y = item.transform[5];
+  const length = Math.max(1, span.end - span.start);
+  const scale = item.str.length ? item.width / item.str.length : length;
+  const left = Math.max(from, span.start) - span.start;
+  const right = Math.min(to, span.end) - span.start;
+  const height = (item.height || 10) * 0.94;
+  return {
+    x: x + left * scale,
+    y,
+    width: Math.max(2, (right - left) * scale),
+    height: Math.max(5, height),
+  };
+}
+
+function findInLine(line, list, { ignoreCase, wholeWord }) {
+  const hits = [];
+  let text = '';
+  const spans = [];
+  line.forEach((item, index) => {
+    if (index) text += ' ';
+    const start = text.length;
+    text += item.str;
+    spans.push({ item, start, end: text.length });
+  });
+  if (!text.trim()) return hits;
+  for (const term of list) {
+    const pattern = wholeWord ? `\\b${escapeRegExp(term)}\\b` : escapeRegExp(term);
+    const re = new RegExp(pattern, ignoreCase ? 'gi' : 'g');
+    let match = re.exec(text);
+    while (match) {
+      const from = match.index;
+      const to = from + match[0].length;
+      const rects = spans
+        .filter((span) => span.end > from && span.start < to)
+        .map((span) => charRectForMatch(span.item, span, from, to));
+      if (rects.length) hits.push({ term, rects, text: match[0] });
+      if (re.lastIndex === from) re.lastIndex += 1;
+      match = re.exec(text);
+    }
+  }
+  return hits;
+}
+
+/** Walk every page of `pdfBytes`, find every occurrence of any of the
+   given `terms`, and return one entry per hit:
+     { page, term, text, rects: [{ x, y, width, height }, ...] }
+   `page` is 0-based; rects are in PDF user space (origin lower-left,
+   Y up), ready to pass straight to pdf-lib's `page.drawRectangle`. */
+export async function findTextMatches(pdfBytes, terms, { ignoreCase = true, wholeWord = true } = {}) {
+  const list = (Array.isArray(terms) ? terms : [terms])
+    .map((term) => String(term || '').trim())
+    .filter((term) => term.length > 0);
+  if (!list.length) return [];
+  const doc = await openPdfDocument(pdfBytes);
+  const matches = [];
+  try {
+    for (let index = 0; index < doc.numPages; index += 1) {
+      const page = await doc.getPage(index + 1);
+      const content = await page.getTextContent();
+      const items = content.items.filter((item) => typeof item.str === 'string');
+      for (const line of groupTextLines(items)) {
+        for (const hit of findInLine(line, list, { ignoreCase, wholeWord })) {
+          matches.push({ page: index, ...hit });
+        }
+      }
+      page.cleanup();
+    }
+  } finally {
+    await doc.destroy();
+  }
+  return matches;
+}
+
+
 let zipPromise;
 export async function loadZip() {
   if (injected.zip) return injected.zip;

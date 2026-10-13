@@ -9,6 +9,7 @@ import {
   el,
   emptyState,
   escapeHtml,
+  findTextMatches,
   flattenPdfPages,
   hasFiles,
   loadPdfJs,
@@ -620,96 +621,6 @@ async function collectPages(root) {
   return { include, range };
 }
 
-async function scanText() {
-  const doc = await openPdfDocument(state.buffer.slice(0));
-  const pages = [];
-  for (let index = 1; index <= doc.numPages; index += 1) {
-    const page = await doc.getPage(index);
-    const content = await page.getTextContent();
-    pages.push(content.items.filter((item) => typeof item.str === 'string'));
-    page.cleanup();
-  }
-  await doc.destroy();
-  return pages;
-}
-
-/* Match each term against a whole line, then map the hit back onto the text
-   items so the box covers only the characters that matched. */
-function findInItems(items, list, { ignoreCase, wholeWord }) {
-  const hits = [];
-  for (const line of groupLines(items)) {
-    let text = '';
-    const spans = [];
-    line.forEach((item, index) => {
-      if (index) text += ' ';
-      const start = text.length;
-      text += item.str;
-      spans.push({ item, start, end: text.length });
-    });
-    if (!text.trim()) continue;
-    for (const term of list) {
-      const pattern = wholeWord ? `\\b${escapeRegExp(term)}\\b` : escapeRegExp(term);
-      const re = new RegExp(pattern, ignoreCase ? 'gi' : 'g');
-      let match = re.exec(text);
-      while (match) {
-        const from = match.index;
-        const to = from + match[0].length;
-        const rects = spans
-          .filter((span) => span.end > from && span.start < to)
-          .map((span) => charRect(span.item, span, from, to));
-        if (rects.length) hits.push({ term, rects, text: match[0] });
-        if (re.lastIndex === from) re.lastIndex += 1;
-        match = re.exec(text);
-      }
-    }
-  }
-  return hits;
-}
-
-function charRect(item, span, from, to) {
-  const x = item.transform[4];
-  const y = item.transform[5];
-  const length = Math.max(1, span.end - span.start);
-  const scale = item.str.length ? item.width / item.str.length : length;
-  const left = Math.max(from, span.start) - span.start;
-  const right = Math.min(to, span.end) - span.start;
-  const height = (item.height || 10) * 0.94;
-  return {
-    x: x + left * scale,
-    y,
-    width: Math.max(2, (right - left) * scale),
-    height: Math.max(5, height),
-  };
-}
-
-/* pdf.js hands back one item per run of glyphs; stitch runs that share a
-   baseline into lines so a phrase can be matched across them. */
-function groupLines(items) {
-  const lines = [];
-  let current = [];
-  let lastY = null;
-  for (const item of items) {
-    const y = item.transform[5];
-    if (lastY !== null && Math.abs(y - lastY) > Math.max(2, (item.height || 10) * 0.45)) {
-      if (current.length) lines.push(current);
-      current = [];
-    }
-    current.push(item);
-    lastY = y;
-    if (item.hasEOL) {
-      if (current.length) lines.push(current);
-      current = [];
-      lastY = null;
-    }
-  }
-  if (current.length) lines.push(current);
-  return lines;
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 async function findMatches(root) {
   const box = q('#fnFindings', root);
   const hint = q('#fnRedactHint', root);
@@ -724,23 +635,21 @@ async function findMatches(root) {
   }
   if (hint) hint.textContent = 'Scanning the text layer…';
   try {
-    const pages = await scanText();
     const { include, error } = await collectPages(root);
     if (error) {
       if (hint) { hint.textContent = error; hint.classList.add('is-error'); }
       return;
     }
+    const hits = await findTextMatches(state.buffer, list, { ignoreCase: state.form.ignoreCase, wholeWord: state.form.wholeWord });
     const perTerm = new Map(list.map((term) => [term, { count: 0, pages: new Set() }]));
     const matches = [];
-    pages.forEach((items, index) => {
-      if (!include.has(index)) return;
-      const hits = findInItems(items, list, { ignoreCase: state.form.ignoreCase, wholeWord: state.form.wholeWord });
-      for (const hit of hits) {
-        perTerm.get(hit.term).count += 1;
-        perTerm.get(hit.term).pages.add(index + 1);
-        matches.push({ page: index, ...hit });
-      }
-    });
+    for (const hit of hits) {
+      if (!include.has(hit.page)) continue;
+      const found = perTerm.get(hit.term);
+      found.count += 1;
+      found.pages.add(hit.page + 1);
+      matches.push(hit);
+    }
     state.matches = matches;
     box.hidden = false;
     box.replaceChildren(

@@ -7,6 +7,8 @@ import {
   el,
   emptyState,
   escapeHtml,
+  findTextMatches,
+  flattenPdfPages,
   hasFiles,
   injected,
   isFileProtocol,
@@ -29,6 +31,7 @@ const MODES = [
   { id: 'merge', label: 'Merge & order', note: 'One file from many' },
   { id: 'split', label: 'Split & extract', note: 'Pages out of one file' },
   { id: 'watermark', label: 'Watermark', note: 'Stamp text on pages' },
+  { id: 'remove-watermark', label: 'Remove watermark', note: 'Strip "DRAFT" and friends' },
   { id: 'margins', label: 'Frame & trim', note: 'Real page margins' },
   { id: 'batch', label: 'Batch rename', note: 'Title → merge or zip' },
   { id: 'bookmarks', label: 'Bookmarks', note: 'Read, split, rewrite links' },
@@ -54,6 +57,13 @@ const defaults = {
   watermarkPosition: 'centre',
   watermarkAll: true,
   watermarkRange: '',
+  removeWatermarkSource: '',
+  removeWatermarkText: '',
+  removeWatermarkRange: '',
+  removeWatermarkPad: 2,
+  removeWatermarkIgnoreCase: true,
+  removeWatermarkWholeWord: true,
+  removeWatermarkFlatten: true,
   mergeName: 'folio-merged',
   marginSource: '',
   bookmarkSource: '',
@@ -255,6 +265,38 @@ function layout() {
           </div>
         </div>
         <div class="lab-actions"><span class="lab-hint" id="labWatermarkHint"></span><button class="button button-export" type="button" id="labWatermarkGo">${downloadIcon}<span>Download stamped PDF</span></button></div>
+      </div>
+
+      <div class="lab-mode-panel" data-mode-panel="remove-watermark" hidden>
+        <p class="lab-help">Find a "DRAFT" or "CONFIDENTIAL" stamp on every page and wipe it. Painted over by default; tick <strong>Flatten page to image</strong> to also remove the underlying characters, so the stamp cannot be lifted off.</p>
+        <div class="lab-row">
+          <label class="field grow"><span class="field-label">Source file</span><select class="text-input" id="labRemoveWatermarkSource"></select></label>
+          <label class="field grow"><span class="field-label">Watermark text</span>
+            <div class="fn-token-row"><input class="text-input" id="labRemoveWatermarkText" type="text" value="${escapeHtml(state.form.removeWatermarkText)}" placeholder="DRAFT" autocomplete="off" />
+              <div class="fn-chips" role="group" aria-label="Common watermarks">
+                <button class="button button-text" type="button" data-remove-watermark-preset="DRAFT">DRAFT</button>
+                <button class="button button-text" type="button" data-remove-watermark-preset="CONFIDENTIAL">CONFIDENTIAL</button>
+                <button class="button button-text" type="button" data-remove-watermark-preset="COPY">COPY</button>
+                <button class="button button-text" type="button" data-remove-watermark-preset="DO NOT DISTRIBUTE">DO NOT DISTRIBUTE</button>
+                <button class="button button-text" type="button" data-remove-watermark-preset="INTERNAL ONLY">INTERNAL ONLY</button>
+                <button class="button button-text" type="button" data-remove-watermark-preset="SAMPLE">SAMPLE</button>
+                <button class="button button-text" type="button" data-remove-watermark-preset="WATERMARK">WATERMARK</button>
+              </div>
+            </div>
+          </label>
+        </div>
+        <div class="lab-row lab-row-sliders">
+          <label class="field"><span class="field-label">Pages</span><input class="text-input" id="labRemoveWatermarkRange" type="text" placeholder="all, or 1-3,7" value="${escapeHtml(state.form.removeWatermarkRange)}" /></label>
+          <label class="field"><span class="field-label">Padding</span><input class="text-input" id="labRemoveWatermarkPad" type="number" min="0" max="14" step="0.5" value="${state.form.removeWatermarkPad}" /></label>
+          <label class="field field-switch"><input type="checkbox" class="switch-input" id="labRemoveWatermarkIgnoreCase" ${state.form.removeWatermarkIgnoreCase ? 'checked' : ''} /><span class="switch-track" aria-hidden="true"></span><span class="field-label">Ignore case</span></label>
+          <label class="field field-switch"><input type="checkbox" class="switch-input" id="labRemoveWatermarkWholeWord" ${state.form.removeWatermarkWholeWord ? 'checked' : ''} /><span class="switch-track" aria-hidden="true"></span><span class="field-label">Whole words only</span></label>
+          <label class="field field-switch"><input type="checkbox" class="switch-input" id="labRemoveWatermarkFlatten" ${state.form.removeWatermarkFlatten ? 'checked' : ''} /><span class="switch-track" aria-hidden="true"></span><span class="field-label">Flatten page to image</span></label>
+        </div>
+        <div class="lab-actions">
+          <span class="lab-hint" id="labRemoveWatermarkHint">Open a PDF and type or pick the watermark text.</span>
+          <button class="button button-light" type="button" id="labRemoveWatermarkScan">Scan for matches</button>
+          <button class="button button-export" type="button" id="labRemoveWatermarkGo">${downloadIcon}<span>Remove watermark and save</span></button>
+        </div>
       </div>
 
       <div class="lab-mode-panel" data-mode-panel="batch" hidden>
@@ -504,7 +546,7 @@ function paintSelects(root) {
   const options = state.sources.length
     ? state.sources.map((source) => `<option value="${source.id}">${escapeHtml(source.name)} · ${source.pageCount}p</option>`).join('')
     : '<option value="">Add a PDF first</option>';
-  for (const [id, key] of [['#labSplitSource', 'splitSource'], ['#labWatermarkSource', 'watermarkSource'], ['#labMarginSource', 'marginSource'], ['#labBookmarkSource', 'bookmarkSource']]) {
+  for (const [id, key] of [['#labSplitSource', 'splitSource'], ['#labWatermarkSource', 'watermarkSource'], ['#labMarginSource', 'marginSource'], ['#labBookmarkSource', 'bookmarkSource'], ['#labRemoveWatermarkSource', 'removeWatermarkSource']]) {
     const select = q(id, root);
     if (!select) continue;
     const previous = select.value;
@@ -824,6 +866,38 @@ function bindForm(root) {
   q('#labBookmarkExport', root)?.addEventListener('click', () => exportBookmarkJson(root));
   q('#labBookmarkSplit', root)?.addEventListener('click', () => splitByBookmark(root));
   q('#labBookmarkRewrite', root)?.addEventListener('click', () => rewriteLinks(root));
+  /* remove-watermark mode bindings */
+  text('#labRemoveWatermarkText', 'removeWatermarkText');
+  text('#labRemoveWatermarkRange', 'removeWatermarkRange');
+  text('#labRemoveWatermarkPad', 'removeWatermarkPad', Number);
+  q('#labRemoveWatermarkSource', root)?.addEventListener('change', (event) => {
+    state.form.removeWatermarkSource = event.target.value;
+    paintRemoveWatermarkHint(root);
+    save();
+  });
+  q('#labRemoveWatermarkIgnoreCase', root)?.addEventListener('change', (event) => {
+    state.form.removeWatermarkIgnoreCase = event.target.checked;
+    save();
+  });
+  q('#labRemoveWatermarkWholeWord', root)?.addEventListener('change', (event) => {
+    state.form.removeWatermarkWholeWord = event.target.checked;
+    save();
+  });
+  q('#labRemoveWatermarkFlatten', root)?.addEventListener('change', (event) => {
+    state.form.removeWatermarkFlatten = event.target.checked;
+    save();
+  });
+  qa('[data-remove-watermark-preset]', root).forEach((node) => {
+    node.addEventListener('click', () => {
+      state.form.removeWatermarkText = node.dataset.removeWatermarkPreset;
+      const input = q('#labRemoveWatermarkText', root);
+      if (input) input.value = state.form.removeWatermarkText;
+      save();
+      paintRemoveWatermarkHint(root);
+    });
+  });
+  q('#labRemoveWatermarkScan', root)?.addEventListener('click', () => scanRemoveWatermark(root));
+  q('#labRemoveWatermarkGo', root)?.addEventListener('click', () => runRemoveWatermark(root));
   q('#labWatermarkAll', root)?.addEventListener('change', (event) => {
     state.form.watermarkAll = event.target.checked;
     paintWatermarkHint(root);
@@ -1432,4 +1506,123 @@ function rewriteDestArray(dest, base, newPageRefs, remap, PDFArray, PDFRef) {
   newArr.push(newPageRef);
   for (let i = 1; i < arr.size(); i += 1) newArr.push(arr.get(i));
   return newArr;
+}
+
+/* -------------------------------------------------- remove-watermark mode ---- */
+/* "Remove watermark" — a one-action mode in the PDF Lab side panel. Drop a
+   PDF, type or pick the watermark text, click Remove. The mode shares the
+   text-layer scanning engine with Finish's Black out panel (findTextMatches
+   in lib.js), so the matching rules — ignore case, whole words only — are
+   the same. The output PDF replaces the watermark with a white box; ticking
+   "Flatten page to image" also re-renders every touched page so the
+   underlying characters are gone for good. */
+
+function removeWatermarkSource(root) {
+  return activeSource(root, 'removeWatermarkSource');
+}
+
+function removeWatermarkTerms() {
+  return String(state.form.removeWatermarkText || '')
+    .split(/[\n,]/)
+    .map((term) => term.trim())
+    .filter((term) => term.length > 0);
+}
+
+function paintRemoveWatermarkHint(root) {
+  const hint = q('#labRemoveWatermarkHint', root);
+  const source = removeWatermarkSource(root);
+  if (!hint) return;
+  if (!source) {
+    hint.textContent = 'Open a PDF and type or pick the watermark text.';
+    return;
+  }
+  const terms = removeWatermarkTerms();
+  if (!terms.length) {
+    hint.textContent = `${source.name} — type or pick the watermark text.`;
+    return;
+  }
+  hint.textContent = `${source.name} — ${terms.length} term${terms.length === 1 ? '' : 's'}. Click "Scan for matches" to see what Folio will cover.`;
+}
+
+async function scanRemoveWatermark(root) {
+  const source = removeWatermarkSource(root);
+  if (!source) { toast('Pick a source file first.'); return; }
+  const terms = removeWatermarkTerms();
+  if (!terms.length) { toast('Type or pick a watermark text first.'); return; }
+  const hint = q('#labRemoveWatermarkHint', root);
+  if (hint) hint.textContent = 'Scanning the text layer…';
+  try {
+    const all = await findTextMatches(source.buffer, terms, {
+      ignoreCase: state.form.removeWatermarkIgnoreCase,
+      wholeWord: state.form.removeWatermarkWholeWord,
+    });
+    const include = removeWatermarkPageSet(source.pageCount, root);
+    const matches = include ? all.filter((m) => include.has(m.page)) : all;
+    const pages = new Set(matches.map((m) => m.page + 1));
+    if (hint) {
+      hint.textContent = `${matches.length} ${matches.length === 1 ? 'spot' : 'spots'} across ${pages.size} page${pages.size === 1 ? '' : 's'} in ${source.name}.`;
+    }
+  } catch (err) {
+    console.error('remove-watermark: scan failed', err);
+    if (hint) hint.textContent = 'The text layer could not be read — the PDF may be a scanned image.';
+  }
+}
+
+function removeWatermarkPageSet(pageCount, root) {
+  const range = String(state.form.removeWatermarkRange || '').trim();
+  if (!range) return null; /* null = every page */
+  const parsed = parsePageRanges(range, pageCount);
+  if (!parsed.ok) return new Set();
+  const include = new Set();
+  parsed.ranges.forEach(({ start, end }) => { for (let p = start; p <= end; p += 1) include.add(p - 1); });
+  return include;
+}
+
+async function runRemoveWatermark(root) {
+  await withBusy(root, '#labRemoveWatermarkGo', 'Removing…', async () => {
+    const source = removeWatermarkSource(root);
+    if (!source) throw new Error('Pick a source file first.');
+    const terms = removeWatermarkTerms();
+    if (!terms.length) throw new Error('Type or pick a watermark text first.');
+    const include = removeWatermarkPageSet(source.pageCount, root);
+    const all = await findTextMatches(source.buffer, terms, {
+      ignoreCase: state.form.removeWatermarkIgnoreCase,
+      wholeWord: state.form.removeWatermarkWholeWord,
+    });
+    const matches = include ? all.filter((m) => include.has(m.page)) : all;
+    if (!matches.length) throw new Error('Nothing matched that text — try a different spelling, or untick "Whole words only".');
+    const { PDFDocument, rgb } = await loadPdfLib();
+    const doc = await PDFDocument.load(source.buffer.slice(0), { ignoreEncryption: true });
+    const pad = Number(state.form.removeWatermarkPad) || 0;
+    const pages = doc.getPages();
+    const touchedPages = new Set();
+    for (const match of matches) {
+      const page = pages[match.page];
+      if (!page) continue;
+      for (const rect of match.rects) {
+        page.drawRectangle({
+          x: rect.x - pad,
+          y: rect.y - pad - (rect.height - 1.2),
+          width: rect.width + pad * 2,
+          height: rect.height + pad * 2,
+          color: rgb(1, 1, 1),
+          borderWidth: 0,
+        });
+      }
+      touchedPages.add(match.page);
+    }
+    let out = await doc.save({ useObjectStreams: false });
+    if (state.form.removeWatermarkFlatten && touchedPages.size) {
+      out = await flattenPdfPages(out, [...touchedPages]);
+    }
+    const name = safeFileName(`${stripPdf(source.name)}-${state.form.removeWatermarkFlatten ? 'watermark-removed-flat' : 'watermark-removed'}`, 'pdf');
+    const blob = new Blob([out], { type: 'application/pdf' });
+    downloadBlob(blob, name);
+    /* Refresh the in-memory source so a second pass starts from the
+       cleaned bytes. */
+    source.buffer = out.slice(0);
+    source.size = out.byteLength;
+    toast(`${matches.length} ${matches.length === 1 ? 'spot' : 'spots'} covered — ${name} is ready.`);
+    paintRemoveWatermarkHint(root);
+  });
 }
