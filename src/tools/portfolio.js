@@ -41,6 +41,9 @@ const defaults = {
   showIndex: false,
   grain: false,
   printQuality: false,
+  exifArtist: '',
+  exifCopyright: '',
+  exifDescription: '',
 };
 
 const prefs = store('portfolio:v1', defaults);
@@ -91,6 +94,31 @@ function layout() {
 
     <div class="pf-notes">
       <label class="field"><span class="field-label">Colophon</span><textarea class="tr-paste" id="pfColophon" rows="3" placeholder="Contact, gear, a line of thanks…">${escapeHtml(form.colophonText ?? '')}</textarea></label>
+    </div>
+
+    <div class="pf-exif" id="pfExif">
+      <div class="pf-exif-head">
+        <h4 class="pf-h4">EXIF studio <span class="pf-exif-count" id="pfExifCount">0 read</span></h4>
+        <button class="button button-text" type="button" id="pfExifReadAll">Read all</button>
+      </div>
+      <p class="lab-help">Camera files often carry a GPS pin, the device's serial, and a timestamp. Read what's on each photo, then strip what you don't want shown, or write your own name and a copyright line in.</p>
+      <ul class="pf-exif-list" id="pfExifList" role="list"></ul>
+      <div class="pf-exif-actions">
+        <button class="button button-light" type="button" id="pfExifStripAll">Strip all EXIF</button>
+        <button class="button button-light" type="button" id="pfExifStripGps">Strip GPS only</button>
+      </div>
+      <details class="pf-exif-write">
+        <summary>Write your own</summary>
+        <div class="lab-row">
+          <label class="field grow"><span class="field-label">Artist</span><input class="text-input" id="pfExifArtist" type="text" value="${escapeHtml(form.exifArtist)}" placeholder="Your name" autocomplete="off" /></label>
+          <label class="field"><span class="field-label">Copyright</span><input class="text-input text-input-narrow" id="pfExifCopyright" type="text" value="${escapeHtml(form.exifCopyright)}" placeholder="© 2026" autocomplete="off" /></label>
+        </div>
+        <label class="field"><span class="field-label">Description</span><textarea class="tr-paste" id="pfExifDescription" rows="2" placeholder="A line of caption">${escapeHtml(form.exifDescription ?? '')}</textarea></label>
+        <div class="lab-actions">
+          <span></span>
+          <button class="button button-light" type="button" id="pfExifWrite">Write to all photos</button>
+        </div>
+      </details>
     </div>
   </section>
 
@@ -276,6 +304,17 @@ function wire(root) {
   });
 
   q('#pfExport', root)?.addEventListener('click', () => exportPdf(root));
+
+  // EXIF studio
+  q('#pfExifReadAll', root)?.addEventListener('click', () => readExifForAll(root));
+  q('#pfExifStripAll', root)?.addEventListener('click', () => stripExifAll(root));
+  q('#pfExifStripGps', root)?.addEventListener('click', () => stripExifGps(root));
+  q('#pfExifWrite', root)?.addEventListener('click', () => writeExifForAll(root));
+  // The write form values are persisted in prefs alongside the rest.
+  const exifSave = debounce(() => prefs.write(state.form), 200);
+  q('#pfExifArtist', root)?.addEventListener('input', (e) => { state.form.exifArtist = e.target.value; exifSave(); });
+  q('#pfExifCopyright', root)?.addEventListener('input', (e) => { state.form.exifCopyright = e.target.value; exifSave(); });
+  q('#pfExifDescription', root)?.addEventListener('input', (e) => { state.form.exifDescription = e.target.value; exifSave(); });
 }
 
 async function addPhotos(files, root) {
@@ -298,6 +337,10 @@ async function addPhotos(files, root) {
         height: source.height,
         caption: '',
         dataUrl: null,
+        exif: null,        // raw exif dict from piexifjs (JPEG only) or null
+        exifRead: false,   // true once we've tried to read this photo's exif
+        exifStripped: false, // true if the user has stripped this photo's exif
+        exifWritten: false, // true if the user has written their own exif
       });
     } catch (error) {
       console.error(error);
@@ -339,6 +382,8 @@ function pageRatio() {
 
 function render(root) {
   renderPhotoList(root);
+  paintExifList(root);
+  paintExifHint(root);
   const stage = q('#pfStage', root);
   if (!stage) return;
   const photos = state.photos;
@@ -609,3 +654,157 @@ async function exportPdf(root) {
     button.innerHTML = original;
   }
 }
+
+/* EXIF studio ---- */
+/* "Strip or write camera metadata before a portfolio goes public."
+   Each photo carries a parsed EXIF dict (JPEG only — piexifjs only speaks JPEG,
+   so for PNG/WebP/HEIC the dict stays null and the read button shows a
+   friendly "no EXIF in this format" line). The foundation commit wires
+   the panel, the per-photo read, and the table; the actual strip and write
+   logic land in the next two commits. */
+
+async function readExifForPhoto(photo) {
+  if (!/\.jpe?g$/i.test(photo.name)) {
+    photo.exif = { unsupported: true };
+    photo.exifRead = true;
+    return;
+  }
+  // Need the raw bytes — re-fetch the file via the blob URL.
+  const blob = await fetch(photo.url).then((r) => r.blob());
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  try {
+    const piexif = (await import('piexifjs')).default;
+    const exifObj = piexif.load(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+    photo.exif = flattenExif(exifObj);
+    photo.exifRead = true;
+  } catch (err) {
+    photo.exif = { error: err.message || 'no EXIF' };
+    photo.exifRead = true;
+  }
+}
+
+function flattenExif(exifObj) {
+  const TAG_NAMES = {
+    0x010f: 'Make', 0x0110: 'Model', 0x0112: 'Orientation',
+    0x011a: 'XResolution', 0x011b: 'YResolution',
+    0x0131: 'Software', 0x0132: 'DateTime', 0x013b: 'Artist',
+    0x8298: 'Copyright',
+    0x8769: 'ExifIFDPointer',
+    0x8825: 'GPSIFDPointer',
+    0x9003: 'DateTimeOriginal', 0x9004: 'DateTimeDigitized',
+    0x9201: 'ShutterSpeed', 0x9202: 'Aperture', 0x9204: 'ExposureBias',
+    0x9207: 'MeteringMode', 0x9208: 'LightSource', 0x9209: 'Flash',
+    0x920a: 'FocalLength', 0x9214: 'SubjectArea',
+    0xa002: 'PixelXDimension', 0xa003: 'PixelYDimension',
+    0xa402: 'ExposureMode', 0xa403: 'WhiteBalance', 0xa404: 'DigitalZoomRatio',
+    0xa405: 'FocalLengthIn35mmFilm', 0xa406: 'SceneCaptureType',
+    0xa432: 'LensMake', 0xa433: 'LensModel', 0xa434: 'LensSerialNumber',
+    0x8827: 'ISOSpeedRatings', 0x927c: 'MakerNote',
+    0x0000: 'GPSVersionID', 0x0001: 'GPSLatitudeRef', 0x0002: 'GPSLatitude',
+    0x0003: 'GPSLongitudeRef', 0x0004: 'GPSLongitude', 0x0005: 'GPSAltitudeRef',
+    0x0006: 'GPSAltitude', 0x0007: 'GPSTimeStamp', 0x0009: 'GPSStatus',
+    0x001d: 'GPSDateStamp',
+  };
+  const out = { sections: [] };
+  for (const ifd of ['0th', 'Exif', 'GPS']) {
+    const block = exifObj[ifd];
+    if (!block || !Object.keys(block).length) continue;
+    const entries = [];
+    for (const tagId of Object.keys(block)) {
+      const id = Number(tagId);
+      const value = block[tagId];
+      const name = TAG_NAMES[id] || `Tag ${id}`;
+      entries.push({ name, value: formatExifValue(value) });
+    }
+    out.sections.push({ ifd, entries });
+  }
+  return out;
+}
+
+function formatExifValue(value) {
+  if (value == null) return '—';
+  if (typeof value === 'string') return value;
+  if (value instanceof Uint8Array || value instanceof ArrayBuffer) return `<${value.byteLength || value.length} bytes>`;
+  if (Array.isArray(value)) return value.join(', ');
+  if (typeof value === 'object' && (value.length != null)) {
+    try { return Array.from(value).join(', '); } catch (_) { return JSON.stringify(value); }
+  }
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+async function readExifForAll(root) {
+  for (const photo of state.photos) {
+    await readExifForPhoto(photo);
+    paintExifList(root);
+  }
+  paintExifHint(root);
+}
+
+function paintExifList(root) {
+  const list = q('#pfExifList', root);
+  if (!list) return;
+  if (state.photos.length === 0) { list.innerHTML = ''; paintExifHint(root); return; }
+  list.innerHTML = state.photos.map((p) => {
+    if (!p.exifRead) {
+      return `<li class="pf-exif-row" data-pf-exif="${p.id}">
+        <div class="pf-exif-head-row">
+          <span class="pf-exif-name">${escapeHtml(p.name)}</span>
+          <span class="pf-exif-tag">not read</span>
+        </div>
+        <div class="pf-exif-note">Click "Read all" to inspect this photo's metadata.</div>
+      </li>`;
+    }
+    if (p.exif.unsupported) {
+      return `<li class="pf-exif-row" data-pf-exif="${p.id}">
+        <div class="pf-exif-head-row">
+          <span class="pf-exif-name">${escapeHtml(p.name)}</span>
+          <span class="pf-exif-tag">${escapeHtml(p.name.split('.').pop() || '?').toUpperCase()}</span>
+        </div>
+        <div class="pf-exif-note">EXIF is a JPEG / TIFF feature. ${escapeHtml(p.name.split('.').pop()?.toUpperCase() || 'This format')} carries its metadata in a different way.</div>
+      </li>`;
+    }
+    if (p.exif.error) {
+      return `<li class="pf-exif-row" data-pf-exif="${p.id}">
+        <div class="pf-exif-head-row">
+          <span class="pf-exif-name">${escapeHtml(p.name)}</span>
+          <span class="pf-exif-tag is-warn">no EXIF</span>
+        </div>
+      </li>`;
+    }
+    if (!p.exif.sections.length) {
+      return `<li class="pf-exif-row" data-pf-exif="${p.id}">
+        <div class="pf-exif-head-row">
+          <span class="pf-exif-name">${escapeHtml(p.name)}</span>
+          <span class="pf-exif-tag is-warn">no EXIF</span>
+        </div>
+      </li>`;
+    }
+    const sections = p.exif.sections.map((s) => `
+      <div class="pf-exif-section">
+        <div class="pf-exif-section-name">${s.ifd === '0th' ? 'Document' : s.ifd === 'Exif' ? 'Camera' : s.ifd}</div>
+        ${s.entries.map((e) => `<div class="pf-exif-entry"><span class="pf-exif-key">${escapeHtml(e.name)}</span><span class="pf-exif-val">${escapeHtml(e.value)}</span></div>`).join('')}
+      </div>
+    `).join('');
+    const hasGps = p.exif.sections.some((s) => s.ifd === 'GPS');
+    return `<li class="pf-exif-row${p.exifStripped ? ' is-stripped' : ''}${p.exifWritten ? ' is-written' : ''}" data-pf-exif="${p.id}">
+      <div class="pf-exif-head-row">
+        <span class="pf-exif-name">${escapeHtml(p.name)}</span>
+        <span class="pf-exif-tag${hasGps ? ' is-warn' : ''}">${hasGps ? 'GPS on' : 'no GPS'}</span>
+      </div>
+      ${sections}
+    </li>`;
+  }).join('');
+}
+
+function paintExifHint(root) {
+  const count = q('#pfExifCount', root);
+  if (!count) return;
+  const read = state.photos.filter((p) => p.exifRead).length;
+  const withGps = state.photos.filter((p) => p.exif && p.exif.sections && p.exif.sections.some((s) => s.ifd === 'GPS')).length;
+  count.textContent = `${read}/${state.photos.length} read${withGps ? ` · ${withGps} with GPS` : ''}`;
+}
+
+function stripExifAll(root) { toast('Strip-all writer is the next commit.'); }
+function stripExifGps(root) { toast('Strip-GPS writer is the next commit.'); }
+function writeExifForAll(root) { toast('Write writer is the commit after that.'); }
