@@ -1293,6 +1293,143 @@ async function splitByBookmark(root) {
   });
 }
 async function rewriteLinks(root) {
-  if (!state.bookmarks.length) { toast('Read the outline first'); return; }
-  toast('Link rewrite is the next commit.');
+  await withBusy(root, '#labBookmarkRewrite', 'Rewriting links…', async () => {
+    const source = activeSource(root, 'bookmarkSource');
+    if (!source) throw new Error('Pick a source file first.');
+    if (!state.bookmarks.length) throw new Error('Read the outline first.');
+    /* The user reorders the source's pages in the merge tab. We read the
+       new order from state.order, build a remap (oldIndex → newIndex, both
+       0-based), copy pages into a new document, then walk the SOURCE pages'
+       annotations and rebuild every /Subtype /Link annotation in the OUT
+       document's context with /A and /Dest rewritten to point to the new
+       page ref. */
+    const sourceEntries = state.order.filter((entry) => entry.sourceId === source.id && !entry.skipped);
+    if (!sourceEntries.length) throw new Error('The merge list is empty for this source.');
+    const { PDFDocument, PDFName, PDFArray, PDFRef, PDFDict } = await loadPdfLib();
+    const base = await PDFDocument.load(source.buffer.slice(0), { ignoreEncryption: true });
+    const basePages = base.getPages();
+    const remap = new Map();
+    sourceEntries.forEach((entry, newIndex) => { remap.set(entry.pageIndex, newIndex); });
+    const out = await PDFDocument.create();
+    out.setCreator('Folio · PDF Lab');
+    out.setTitle(stripPdf(source.name));
+    const newIndexes = sourceEntries.map((entry) => entry.pageIndex);
+    const outputPages = (await out.copyPages(base, newIndexes));
+    const newPageRefs = new Map();
+    outputPages.forEach((page, outputIndex) => {
+      const oldIndex = newIndexes[outputIndex];
+      newPageRefs.set(oldIndex, page.ref);
+    });
+    outputPages.forEach((page) => out.addPage(page));
+    /* Per output-page-index, accumulate the new link annotations to attach
+       to that page. */
+    const newAnnotsPerOutputIndex = new Map();
+    let touched = 0;
+    for (let i = 0; i < sourceEntries.length; i += 1) {
+      const oldIndex = newIndexes[i];
+      const oldPage = basePages[oldIndex];
+      if (!oldPage || !oldPage.node) continue;
+      const oldAnnots = oldPage.node.Annots();
+      if (!oldAnnots) continue;
+      for (let a = 0; a < oldAnnots.size(); a += 1) {
+        const annot = oldAnnots.lookup(a);
+        if (!annot) continue;
+        const subtype = annot.get(PDFName.of('Subtype'));
+        if (!subtype || subtype.toString() !== '/Link') continue;
+        const newAnnot = cloneLinkAnnotation(annot, out, newPageRefs, remap, base, PDFName, PDFArray, PDFRef, PDFDict);
+        if (newAnnot) {
+          const list = newAnnotsPerOutputIndex.get(i) || [];
+          list.push(newAnnot);
+          newAnnotsPerOutputIndex.set(i, list);
+          touched += 1;
+        }
+      }
+    }
+    /* Register each new annotation in the OUT context and attach a fresh
+       /Annots array to the corresponding output page. */
+    for (let i = 0; i < outputPages.length; i += 1) {
+      const list = newAnnotsPerOutputIndex.get(i);
+      if (!list || !list.length) continue;
+      const refs = list.map((annot) => out.context.register(annot));
+      const arr = PDFArray.withContext(out.context);
+      refs.forEach((ref) => arr.push(ref));
+      outputPages[i].node.set(PDFName.of('Annots'), arr);
+    }
+    if (!touched) throw new Error('No link annotations to rewrite.');
+    const data = new Uint8Array(await out.save({ useObjectStreams: true }));
+    const pageCount = out.getPageCount();
+    const name = safeFileName(`${stripPdf(source.name)}-links-rewritten`, 'pdf');
+    save(data, name, pageCount);
+    toast(`${touched} link${touched === 1 ? '' : 's'} re-pointed to the new page order.`);
+  });
+}
+
+/* Build a NEW link annotation in the OUT document's context, copying
+   the cosmetic fields (Rect, Border, C, H, NM, Contents) from the source
+   and rewriting the destination (/A /D for a GoTo action, or /Dest) to
+   point to the correct page in the output. Returns the new PDFDict, or
+   null if the annotation has no rewritable destination. */
+function cloneLinkAnnotation(annot, out, newPageRefs, remap, base, PDFName, PDFArray, PDFRef, PDFDict) {
+  const newAnnot = PDFDict.withContext(out.context);
+  newAnnot.set(PDFName.of('Subtype'), PDFName.of('Link'));
+  for (const key of ['Type', 'Rect', 'Border', 'C', 'H', 'Contents', 'NM', 'StructParent', 'QuadPoints']) {
+    const value = annot.get(PDFName.of(key));
+    if (value) newAnnot.set(PDFName.of(key), value);
+  }
+  const action = annot.lookupMaybe(PDFName.of('A'), PDFDict);
+  if (action) {
+    const subtype = action.get(PDFName.of('S'));
+    if (subtype && subtype.toString() === '/GoTo') {
+      const dest = action.get(PDFName.of('D'));
+      const rewritten = rewriteDestArray(dest, base, newPageRefs, remap, PDFArray, PDFRef);
+      if (rewritten) {
+        const newAction = PDFDict.withContext(out.context);
+        newAction.set(PDFName.of('S'), PDFName.of('GoTo'));
+        newAction.set(PDFName.of('D'), rewritten);
+        newAnnot.set(PDFName.of('A'), newAction);
+      }
+    } else {
+      /* Non-Goto action (URI, GoToR, Launch, Named) — pass through. */
+      newAnnot.set(PDFName.of('A'), action);
+    }
+  }
+  const dest = annot.get(PDFName.of('Dest'));
+  if (dest) {
+    const rewritten = rewriteDestArray(dest, base, newPageRefs, remap, PDFArray, PDFRef);
+    if (rewritten) newAnnot.set(PDFName.of('Dest'), rewritten);
+  }
+  if (!newAnnot.get(PDFName.of('A')) && !newAnnot.get(PDFName.of('Dest'))) return null;
+  return newAnnot;
+}
+
+/* If `dest` is (or resolves to) a [pageRef XYZ x y z] array pointing to a
+   page in the SOURCE document, return a new array (in the OUT context)
+   pointing to the same page in the output. Returns null when we cannot
+   safely rewrite (URI, remote GoToR, named-dest string). */
+function rewriteDestArray(dest, base, newPageRefs, remap, PDFArray, PDFRef) {
+  if (!dest) return null;
+  let arr = null;
+  if (dest instanceof PDFArray) arr = dest;
+  else if (dest instanceof PDFRef) {
+    const looked = base.context.lookup(dest);
+    if (looked instanceof PDFArray) arr = looked;
+  }
+  if (!arr || arr.size() === 0) return null;
+  const first = arr.get(0);
+  if (!(first instanceof PDFRef)) return null;
+  const basePages = base.getPages();
+  let oldIndex = -1;
+  for (let i = 0; i < basePages.length; i += 1) {
+    if (basePages[i].ref && basePages[i].ref.toString() === first.toString()) { oldIndex = i; break; }
+  }
+  if (oldIndex < 0) return null;
+  if (!remap.has(oldIndex)) return null;
+  const newPageRef = newPageRefs.get(oldIndex);
+  if (!newPageRef) return null;
+  const outContext = newPageRef.object && newPageRef.object.context ? newPageRef.object.context : null;
+  if (!outContext) return null;
+  const newArr = PDFArray.withContext(outContext);
+  newArr.push(newPageRef);
+  for (let i = 1; i < arr.size(); i += 1) newArr.push(arr.get(i));
+  return newArr;
 }
