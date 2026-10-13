@@ -328,6 +328,7 @@ function clearFile(root) {
   state.staged = [];
   state.read = [];
   state.answers = {};
+  state._cleared = false;
   if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
   state.previewUrl = null;
   paintCard(root);
@@ -452,7 +453,7 @@ function paintMode(root) {
   if (fillHint) fillHint.textContent = state.buffer ? 'Type answers below; they will be written into the file.' : 'Open a PDF with form fields to start filling.';
 
   if (state.mode === 'read') paintReadList(root);
-  // fill-mode: paintFillList lands in the next commit
+  if (state.mode === 'fill') paintFillList(root);
 }
 
 function paintOptionsRow(root) {
@@ -648,14 +649,14 @@ function readFieldValue(field) {
   }
   if (cn === 'PDFDropdown') {
     const sel = field.getSelected();
-    return { kind: 'dropdown', value: sel && sel.length ? sel.join(', ') : '' };
+    return { kind: 'dropdown', value: sel && sel.length ? sel.join(', ') : '', options: field.getOptions() };
   }
   if (cn === 'PDFOptionList') {
     const sel = field.getSelected();
-    return { kind: 'listbox', value: sel && sel.length ? sel.join(', ') : '' };
+    return { kind: 'listbox', value: sel && sel.length ? sel : [], options: field.getOptions() };
   }
   if (cn === 'PDFRadioGroup') {
-    return { kind: 'radio', value: field.getSelected() || '' };
+    return { kind: 'radio', value: field.getSelected() || '', options: field.getOptions() };
   }
   if (cn === 'PDFButton') {
     return { kind: 'button', value: '' };
@@ -727,11 +728,122 @@ async function downloadAnswers(root) {
   toast(`Downloaded ${state.read.length} field${state.read.length === 1 ? '' : 's'} as ${state.form.readFormat.toUpperCase()}`);
 }
 
-/* -------------------------------------------------- fill-mode (stub) ---- */
-function clearAnswers(root) {
-  toast('Fill-mode reset is the next commit.');
+/* -------------------------------------------------- fill-mode ---- */
+function paintFillList(root) {
+  const list = q('#fmFillList', root);
+  if (!list) return;
+  if (state.read.length === 0) {
+    list.innerHTML = '';
+    return;
+  }
+  list.innerHTML = state.read.map((f) => {
+    // If the user has explicitly cleared answers, every field starts empty.
+    // Otherwise, the user-typed answer wins; falling back to the current PDF
+    // value gives a sensible default.
+    const current = state._cleared ? '' : (state.answers[f.name] ?? f.value ?? '');
+    let input;
+    if (f.kind === 'text') {
+      input = `<input class="text-input" data-fill-name="${escapeHtml(f.name)}" type="text" value="${escapeHtml(current)}" autocomplete="off" />`;
+    } else if (f.kind === 'checkbox') {
+      const on = current === 'on' || current === true || current === 'true';
+      input = `<label class="fm-check"><input type="checkbox" data-fill-name="${escapeHtml(f.name)}" data-fill-type="checkbox"${on ? ' checked' : ''} /><span>${on ? 'checked' : 'unchecked'}</span></label>`;
+    } else if (f.kind === 'radio' && f.options && f.options.length) {
+      input = `<div class="fm-fill-options">${f.options.map((opt) => `<label><input type="radio" name="fm-${escapeHtml(f.name)}" data-fill-name="${escapeHtml(f.name)}" data-fill-type="radio" value="${escapeHtml(opt)}"${current === opt ? ' checked' : ''} /><span>${escapeHtml(opt)}</span></label>`).join('')}</div>`;
+    } else if (f.kind === 'dropdown' && f.options && f.options.length) {
+      input = `<select class="text-input" data-fill-name="${escapeHtml(f.name)}" data-fill-type="dropdown">${f.options.map((opt) => `<option value="${escapeHtml(opt)}"${current === opt ? ' selected' : ''}>${escapeHtml(opt)}</option>`).join('')}</select>`;
+    } else if (f.kind === 'listbox' && f.options && f.options.length) {
+      input = `<div class="fm-fill-options">${f.options.map((opt) => `<label><input type="checkbox" name="fm-${escapeHtml(f.name)}" data-fill-name="${escapeHtml(f.name)}" data-fill-type="listbox" value="${escapeHtml(opt)}"${(Array.isArray(current) ? current : String(current).split(',').map(s => s.trim())).includes(opt) ? ' checked' : ''} /><span>${escapeHtml(opt)}</span></label>`).join('')}</div>`;
+    } else {
+      // button / signature / unknown — read-only
+      input = `<span class="fm-page">no input for this kind</span>`;
+    }
+    return `
+      <div class="fm-fill-row">
+        <span class="fm-kind">${escapeHtml(f.kind)}</span>
+        <div>
+          <div class="fm-name">${escapeHtml(f.name)}</div>
+          <div style="margin-top:4px">${input}</div>
+        </div>
+        <span class="fm-page">${f.page ? `p.${f.page}` : ''}</span>
+      </div>
+    `;
+  }).join('');
+  // wire inputs
+  qa('[data-fill-name]', list).forEach((node) => {
+    const name = node.dataset.fillName;
+    const type = node.dataset.fillType || 'text';
+    const handler = () => {
+      state._cleared = false; // any user input cancels the "cleared" state
+      if (type === 'text') state.answers[name] = node.value;
+      else if (type === 'checkbox') state.answers[name] = node.checked ? 'on' : 'off';
+      else if (type === 'radio') state.answers[name] = node.value;
+      else if (type === 'dropdown') state.answers[name] = node.value;
+      else if (type === 'listbox') {
+        const checked = qa(`input[name="fm-${CSS.escape(name)}"]:checked`, list).map((n) => n.value);
+        state.answers[name] = checked;
+      }
+    };
+    node.addEventListener('input', handler);
+    node.addEventListener('change', handler);
+  });
 }
+
+function clearAnswers(root) {
+  state.answers = {};
+  state._cleared = true;
+  paintFillList(root);
+  toast('Cleared all answers');
+}
+
 async function exportFill(root) {
   if (!state.buffer) { toast('Open a PDF first'); return; }
-  toast('Fill-mode writer is the next commit.');
+  if (state.read.length === 0) { toast('No fields to fill'); return; }
+  const button = q('#fmFillGo', root);
+  if (button) button.disabled = true;
+  try {
+    const { PDFDocument } = await loadPdfLib();
+    const pdfDoc = await PDFDocument.load(state.buffer.slice(0), { ignoreEncryption: true });
+    const form = pdfDoc.getForm();
+    let written = 0;
+    for (const meta of state.read) {
+      if (!(meta.name in state.answers)) continue; // user left this one untouched
+      const value = state.answers[meta.name];
+      try {
+        const field = form.getField(meta.name);
+        applyAnswerToField(field, value);
+        written++;
+      } catch (err) {
+        console.warn(`forms: could not set ${meta.name}`, err);
+      }
+    }
+    if (state.form.flatten) form.flatten();
+    const out = await pdfDoc.save();
+    const suffix = state.form.flatten ? '-filled-flat' : '-filled';
+    const base = (state.name || 'document.pdf').replace(/\.pdf$/i, '');
+    downloadBlob(new Blob([out], { type: 'application/pdf' }), `${base}${suffix}.pdf`);
+    toast(`Wrote ${written} answer${written === 1 ? '' : 's'}${state.form.flatten ? ' and flattened' : ''}`);
+  } catch (err) {
+    console.error('forms: exportFill failed', err);
+    toast('Could not save the filled PDF');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function applyAnswerToField(field, value) {
+  const cn = field.constructor.name;
+  if (cn === 'PDFTextField') {
+    field.setText(value == null ? '' : String(value));
+  } else if (cn === 'PDFCheckBox') {
+    if (value === 'on' || value === true || value === 'true') field.check();
+    else field.uncheck();
+  } else if (cn === 'PDFDropdown' || cn === 'PDFOptionList') {
+    if (Array.isArray(value)) field.select(value);
+    else if (value) field.select(String(value));
+    else field.clear();
+  } else if (cn === 'PDFRadioGroup') {
+    if (value) field.select(String(value));
+    else field.clear();
+  }
+  // buttons / signatures: no settable value
 }
