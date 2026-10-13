@@ -487,6 +487,17 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 .lab-batch-meta code { font-family: var(--mono); font-size: 9px; color: #4a5044; background: #ecedde; padding: 1px 5px; border-radius: 3px; }
 .lab-batch-tag { padding: 1px 6px; border-radius: 3px; background: #e9e6d8; color: #6a7064; }
 .lab-batch-tag.is-warn { background: #f3e2c4; color: #8a6a3a; }
+/* Bookmarks tree — like a file manager's outline view */
+.lab-bookmark-tree { display: block; min-height: 40px; max-height: 360px; overflow: auto; padding: 6px 4px; border: 1px dashed var(--line, #d8d3c2); border-radius: 8px; background: rgba(255,255,255,.4); }
+.lab-bookmark-tree:empty::before { content: "Read an outline to see the tree"; color: #8a8e80; font-size: 10px; padding: 12px; display: block; }
+.lab-bookmark-empty { color: #8a8e80; font-size: 10px; padding: 12px; }
+.lab-bookmark-list, .lab-bookmark-children { list-style: none; margin: 0; padding: 0; }
+.lab-bookmark-list .lab-bookmark-children { margin-left: 16px; border-left: 1px dashed #d8d3c2; padding-left: 8px; }
+.lab-bookmark-row { display: grid; grid-template-columns: 14px 1fr auto; gap: 6px; align-items: center; padding: 3px 6px; border-radius: 4px; font-size: 11px; }
+.lab-bookmark-row:hover { background: #f0f0e6; }
+.lab-bookmark-toggle { color: #8a8e80; font-size: 9px; text-align: center; }
+.lab-bookmark-title { color: #292e23; word-break: break-word; }
+.lab-bookmark-page { color: #6a7064; font-family: var(--mono); font-size: 9px; background: #ecedde; padding: 1px 6px; border-radius: 3px; }
 .lab-drag { color: #c3cabd; cursor: grab; }
 .lab-drag svg { display: block; width: 11px; height: 18px; }
 .lab-page-number { color: #666c64; font-family: var(--mono); font-size: 9px; text-align: right; }

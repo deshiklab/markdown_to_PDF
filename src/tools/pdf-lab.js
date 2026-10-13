@@ -8,6 +8,7 @@ import {
   emptyState,
   escapeHtml,
   hasFiles,
+  injected,
   isFileProtocol,
   loadPdfJs,
   loadPdfLib,
@@ -30,6 +31,7 @@ const MODES = [
   { id: 'watermark', label: 'Watermark', note: 'Stamp text on pages' },
   { id: 'margins', label: 'Frame & trim', note: 'Real page margins' },
   { id: 'batch', label: 'Batch rename', note: 'Title → merge or zip' },
+  { id: 'bookmarks', label: 'Bookmarks', note: 'Read, split, rewrite links' },
 ];
 /* 72 pt to the inch: pdf-lib works in points, the controls in whatever the
    reader thinks in. */
@@ -54,6 +56,7 @@ const defaults = {
   watermarkRange: '',
   mergeName: 'folio-merged',
   marginSource: '',
+  bookmarkSource: '',
   marginAction: 'frame',
   marginUnit: 'mm',
   marginTop: 12,
@@ -72,6 +75,9 @@ const state = {
   form: { ...prefs.read() },
   // batch mode: the list of files in order, with the user-edited names
   batch: [],
+  // bookmarks mode: the parsed outline of the currently loaded file
+  bookmarks: [],
+  bookmarksDoc: null, // the pdfjs document the outline was read from
 };
 
 const downloadIcon = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5v8m0 0 3-3m-3 3-3-3M4.5 12.5v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3"/></svg>';
@@ -260,6 +266,23 @@ function layout() {
             <button class="button button-light" type="button" id="labBatchSort">Sort by name</button>
             <button class="button button-export" type="button" id="labBatchZip">${downloadIcon}<span>Download renamed zip</span></button>
             <button class="button button-export" type="button" id="labBatchMerge">${downloadIcon}<span>Download merged PDF</span></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="lab-mode-panel" data-mode-panel="bookmarks" hidden>
+        <p class="lab-help">Read the outline of a PDF, split it into one file per top-level bookmark, or rewrite the internal links so they survive a reorder.</p>
+        <div class="lab-row">
+          <label class="field grow"><span class="field-label">Source file</span><select class="text-input" id="labBookmarkSource"></select></label>
+          <button class="button button-light" type="button" id="labBookmarkRead">Read outline</button>
+        </div>
+        <div id="labBookmarkTree" class="lab-bookmark-tree" role="tree" aria-label="PDF outline"></div>
+        <div class="lab-actions">
+          <span class="lab-hint" id="labBookmarkHint">Add a PDF with an outline to begin.</span>
+          <div class="lab-actions-row">
+            <button class="button button-light" type="button" id="labBookmarkExport">${downloadIcon}<span>Export outline JSON</span></button>
+            <button class="button button-export" type="button" id="labBookmarkSplit">${downloadIcon}<span>Split by top-level bookmark</span></button>
+            <button class="button button-light" type="button" id="labBookmarkRewrite">Rewrite internal links</button>
           </div>
         </div>
       </div>
@@ -481,7 +504,7 @@ function paintSelects(root) {
   const options = state.sources.length
     ? state.sources.map((source) => `<option value="${source.id}">${escapeHtml(source.name)} · ${source.pageCount}p</option>`).join('')
     : '<option value="">Add a PDF first</option>';
-  for (const [id, key] of [['#labSplitSource', 'splitSource'], ['#labWatermarkSource', 'watermarkSource'], ['#labMarginSource', 'marginSource']]) {
+  for (const [id, key] of [['#labSplitSource', 'splitSource'], ['#labWatermarkSource', 'watermarkSource'], ['#labMarginSource', 'marginSource'], ['#labBookmarkSource', 'bookmarkSource']]) {
     const select = q(id, root);
     if (!select) continue;
     const previous = select.value;
@@ -791,6 +814,16 @@ function bindForm(root) {
     paintWatermarkHint(root);
     save();
   });
+  q('#labBookmarkSource', root)?.addEventListener('change', (event) => {
+    state.form.bookmarkSource = event.target.value;
+    state.bookmarks = [];
+    paintBookmarkTree(root);
+    paintBookmarkHint(root);
+  });
+  q('#labBookmarkRead', root)?.addEventListener('click', () => readBookmarks(root));
+  q('#labBookmarkExport', root)?.addEventListener('click', () => exportBookmarkJson(root));
+  q('#labBookmarkSplit', root)?.addEventListener('click', () => splitByBookmark(root));
+  q('#labBookmarkRewrite', root)?.addEventListener('click', () => rewriteLinks(root));
   q('#labWatermarkAll', root)?.addEventListener('change', (event) => {
     state.form.watermarkAll = event.target.checked;
     paintWatermarkHint(root);
@@ -1095,4 +1128,120 @@ async function exportBatchMerge(root) {
 async function exportBatchZip(root) {
   if (state.batch.length === 0) { toast('Drop a few PDFs first'); return; }
   toast('Zip writer is the next commit.');
+}
+
+/* -------------------------------------------------- bookmarks mode ---- */
+/* "Bookmarks & links" — read a PDF outline via pdf.js (which understands
+   the format), show it as a tree, and offer three actions: export the
+   outline as JSON, split the file at the top-level bookmark pages, and
+   rewrite internal link annotations to match the new page order. The
+   foundation commit wires the panel + tree; the three actions land in
+   the next three commits. */
+
+async function readBookmarks(root) {
+  const sourceId = q('#labBookmarkSource', root)?.value;
+  const source = state.sources.find((s) => s.id === sourceId);
+  if (!source) { toast('Pick a source file first'); return; }
+  const button = q('#labBookmarkRead', root);
+  if (button) button.disabled = true;
+  try {
+    const pdfjs = await loadPdfJs();
+    const doc = await pdfjs.getDocument({ data: source.buffer.slice(0), ...(injected.pdfjsAssets || {}) }).promise;
+    state.bookmarksDoc = doc;
+    const outline = (await doc.getOutline()) || [];
+    const destinations = (await doc.getDestinations()) || {};
+    const pages = [];
+    for (let i = 1; i <= doc.numPages; i += 1) pages.push(await doc.getPage(i));
+    state.bookmarks = outline.map((node) => walkBookmarkNode(node, destinations, pages));
+    paintBookmarkTree(root);
+    paintBookmarkHint(root);
+  } catch (err) {
+    console.error('bookmarks: read failed', err);
+    toast('Could not read the outline');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function walkBookmarkNode(node, destinations, pages) {
+  return {
+    title: node.title || '(untitled)',
+    page: resolveBookmarkPage(node, destinations, pages),
+    items: Array.isArray(node.items) ? node.items.map((child) => walkBookmarkNode(child, destinations, pages)) : [],
+  };
+}
+
+function resolveBookmarkPage(node, destinations, pages) {
+  // dest can be: a PDFRef-like object, an array, or a named-destination string
+  let dest = node.dest;
+  if (typeof dest === 'string') {
+    dest = destinations[dest] || null;
+  }
+  if (Array.isArray(dest) && dest.length) {
+    const ref = dest[0];
+    for (let i = 0; i < pages.length; i += 1) {
+      if (pages[i].ref && ref && pages[i].ref.toString && ref.toString && pages[i].ref.toString() === ref.toString()) {
+        return i + 1;
+      }
+    }
+  }
+  // url-based bookmarks: no page
+  if (node.url) return null;
+  return null;
+}
+
+function paintBookmarkTree(root) {
+  const tree = q('#labBookmarkTree', root);
+  if (!tree) return;
+  if (!state.bookmarks.length) {
+    tree.innerHTML = '<div class="lab-bookmark-empty">This PDF has no outline yet — readers will show an empty bookmarks panel.</div>';
+    return;
+  }
+  const renderNode = (node, depth) => {
+    const pageLabel = node.page ? `p.${node.page}` : '—';
+    const hasChildren = node.items && node.items.length;
+    return `
+      <li class="lab-bookmark-row" role="treeitem" aria-level="${depth + 1}">
+        <span class="lab-bookmark-toggle" aria-hidden="true">${hasChildren ? '▾' : '·'}</span>
+        <span class="lab-bookmark-title">${escapeHtml(node.title)}</span>
+        <span class="lab-bookmark-page">${pageLabel}</span>
+        ${hasChildren ? `<ul class="lab-bookmark-children" role="group">${node.items.map((c) => renderNode(c, depth + 1)).join('')}</ul>` : ''}
+      </li>
+    `;
+  };
+  tree.innerHTML = `<ul class="lab-bookmark-list" role="tree">${state.bookmarks.map((b) => renderNode(b, 0)).join('')}</ul>`;
+}
+
+function paintBookmarkHint(root) {
+  const hint = q('#labBookmarkHint', root);
+  if (!hint) return;
+  if (!state.bookmarks.length) {
+    hint.textContent = 'No outline in this PDF.';
+  } else {
+    const total = state.bookmarks.length + countNestedBookmarks(state.bookmarks);
+    hint.textContent = `${state.bookmarks.length} top-level · ${total} total bookmarks.`;
+  }
+}
+
+function countNestedBookmarks(items) {
+  let n = 0;
+  for (const item of items) {
+    if (item.items && item.items.length) {
+      n += item.items.length + countNestedBookmarks(item.items);
+    }
+  }
+  return n;
+}
+
+async function exportBookmarkJson(root) {
+  if (!state.bookmarks.length) { toast('Read the outline first'); return; }
+  toast('Outline export is the next commit.');
+}
+async function splitByBookmark(root) {
+  if (!state.bookmarks.length) { toast('Read the outline first'); return; }
+  toast('Split by bookmark is the next commit.');
+}
+async function rewriteLinks(root) {
+  if (!state.bookmarks.length) { toast('Read the outline first'); return; }
+  toast('Link rewrite is the next commit.');
 }
