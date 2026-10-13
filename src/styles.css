@@ -1167,25 +1167,29 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 /* ---------------------------------------------------------------- exif ---- */
 /* Exif studio in the Photo Portfolio tab — a section in the side panel that
    shows each photo's metadata as a small table. */
-.pf-exif { display: grid; gap: 8px; padding: 12px; margin: 12px; border: 1px solid var(--line, #d8d3c2); border-radius: 10px; background: #fbfaf6; }
-.pf-exif-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.pf-exif-head .pf-h4 { display: flex; align-items: baseline; gap: 8px; font-size: 11px; font-weight: 700; color: #292e23; margin: 0; }
-.pf-exif-count { font-size: 9px; color: #6a7064; font-weight: 500; background: #e9e6d8; padding: 1px 6px; border-radius: 8px; }
+.pf-exif { display: grid; gap: 10px; padding: 14px; margin: 12px; border: 1px solid var(--line, #d8d3c2); border-radius: 12px; background: #fbfaf6; }
+.pf-exif-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.pf-exif-head .pf-h4 { font-size: 12px; font-weight: 700; color: #292e23; margin: 0; line-height: 1.2; }
+.pf-exif-count { font-size: 10px; color: #6a7064; font-weight: 500; background: #e9e6d8; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+.pf-exif-count.is-warn { background: #f3e2c4; color: #8a6a3a; }
 .pf-exif-list { display: grid; gap: 6px; max-height: 320px; overflow: auto; padding: 0; margin: 0; list-style: none; }
-.pf-exif-row { border: 1px solid #d8d3c2; border-radius: 6px; background: #fffefa; padding: 6px 8px; display: grid; gap: 4px; }
+.pf-exif-list:empty { display: none; }
+.pf-exif-list:empty + .pf-exif-actions { display: none; }
+.pf-exif-row { border: 1px solid #d8d3c2; border-radius: 6px; background: #fffefa; padding: 8px 10px; display: grid; gap: 4px; }
 .pf-exif-row.is-stripped { border-color: #c6d4b8; background: #f0f6ec; }
 .pf-exif-row.is-written { border-color: #d6c8a8; background: #fbf6e9; }
 .pf-exif-head-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .pf-exif-name { font-family: var(--mono, monospace); font-size: 10px; color: #292e23; word-break: break-all; }
-.pf-exif-tag { font-size: 9px; padding: 1px 6px; border-radius: 3px; background: #e9e6d8; color: #6a7064; text-transform: uppercase; letter-spacing: .6px; }
+.pf-exif-tag { font-size: 9px; padding: 2px 7px; border-radius: 3px; background: #e9e6d8; color: #6a7064; text-transform: uppercase; letter-spacing: .6px; white-space: nowrap; }
 .pf-exif-tag.is-warn { background: #f3e2c4; color: #8a6a3a; }
 .pf-exif-section { display: grid; gap: 2px; padding: 4px 0; border-top: 1px dashed #e7e3d4; }
-.pf-exif-section-name { font-size: 8px; text-transform: uppercase; letter-spacing: .8px; color: #6a7064; font-weight: 700; }
+.pf-exif-section-name { font-size: 8px; text-transform: uppercase; letter-spacing: .8px; color: #6a7064; font-weight: 700; padding: 2px 0; }
 .pf-exif-entry { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 8px; font-size: 10px; padding: 1px 0; }
 .pf-exif-key { color: #6a7064; }
 .pf-exif-val { color: #292e23; word-break: break-word; font-family: var(--mono, monospace); }
 .pf-exif-note { font-size: 9px; color: #8a8e80; padding: 4px 0 0; }
 .pf-exif-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.pf-exif-actions .button { flex: 1 1 auto; min-width: 0; justify-content: center; }
 .pf-exif-write { border-top: 1px solid #e7e3d4; padding-top: 8px; }
 .pf-exif-write summary { font-size: 10px; color: #5f6a5e; cursor: pointer; padding: 4px 0; }
 .pf-exif-write[open] summary { font-weight: 600; color: #292e23; }

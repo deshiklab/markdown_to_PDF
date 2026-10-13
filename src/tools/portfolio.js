@@ -98,12 +98,13 @@ function layout() {
 
     <div class="pf-exif" id="pfExif">
       <div class="pf-exif-head">
-        <h4 class="pf-h4">EXIF studio <span class="pf-exif-count" id="pfExifCount">0 read</span></h4>
-        <button class="button button-text" type="button" id="pfExifReadAll">Read all</button>
+        <h4 class="pf-h4">EXIF studio</h4>
+        <span class="pf-exif-count" id="pfExifCount">no photos yet</span>
       </div>
       <p class="lab-help">Camera files often carry a GPS pin, the device's serial, and a timestamp. Read what's on each photo, then strip what you don't want shown, or write your own name and a copyright line in.</p>
       <ul class="pf-exif-list" id="pfExifList" role="list"></ul>
       <div class="pf-exif-actions">
+        <button class="button button-light" type="button" id="pfExifReadAll">Read all</button>
         <button class="button button-light" type="button" id="pfExifStripAll">Strip all EXIF</button>
         <button class="button button-light" type="button" id="pfExifStripGps">Strip GPS only</button>
       </div>
@@ -384,6 +385,7 @@ function render(root) {
   renderPhotoList(root);
   paintExifList(root);
   paintExifHint(root);
+  paintExifEmptyState(root);
   const stage = q('#pfStage', root);
   if (!stage) return;
   const photos = state.photos;
@@ -800,9 +802,28 @@ function paintExifList(root) {
 function paintExifHint(root) {
   const count = q('#pfExifCount', root);
   if (!count) return;
+  const total = state.photos.length;
+  if (total === 0) {
+    count.textContent = 'no photos yet';
+    count.classList.toggle('is-warn', false);
+    return;
+  }
   const read = state.photos.filter((p) => p.exifRead).length;
   const withGps = state.photos.filter((p) => p.exif && p.exif.sections && p.exif.sections.some((s) => s.ifd === 'GPS')).length;
-  count.textContent = `${read}/${state.photos.length} read${withGps ? ` · ${withGps} with GPS` : ''}`;
+  count.textContent = `${read}/${total} read${withGps ? ` · ${withGps} with GPS` : ''}`;
+  count.classList.toggle('is-warn', withGps > 0);
+}
+
+function paintExifEmptyState(root) {
+  const section = q('#pfExif', root);
+  if (!section) return;
+  const list = q('#pfExifList', root);
+  const actions = q('.pf-exif-actions', root);
+  const help = q('.pf-exif .lab-help', root);
+  const empty = state.photos.length === 0;
+  if (list) list.hidden = empty;
+  if (actions) actions.hidden = empty;
+  if (help) help.hidden = empty;
 }
 
 function stripExifAll(root) { toast('Strip-all writer is the next commit.'); }
