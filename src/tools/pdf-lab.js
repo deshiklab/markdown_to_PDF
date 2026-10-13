@@ -294,8 +294,11 @@ function layout() {
         </div>
         <div class="lab-actions">
           <span class="lab-hint" id="labRemoveWatermarkHint">Open a PDF and type or pick the watermark text.</span>
-          <button class="button button-light" type="button" id="labRemoveWatermarkScan">Scan for matches</button>
-          <button class="button button-export" type="button" id="labRemoveWatermarkGo">${downloadIcon}<span>Remove watermark and save</span></button>
+          <div class="lab-actions-row">
+            <button class="button button-light" type="button" id="labRemoveWatermarkGuess">Guess the watermark</button>
+            <button class="button button-light" type="button" id="labRemoveWatermarkScan">Scan for matches</button>
+            <button class="button button-export" type="button" id="labRemoveWatermarkGo">${downloadIcon}<span>Remove watermark and save</span></button>
+          </div>
         </div>
       </div>
 
@@ -897,6 +900,7 @@ function bindForm(root) {
     });
   });
   q('#labRemoveWatermarkScan', root)?.addEventListener('click', () => scanRemoveWatermark(root));
+  q('#labRemoveWatermarkGuess', root)?.addEventListener('click', () => guessWatermarkText(root));
   q('#labRemoveWatermarkGo', root)?.addEventListener('click', () => runRemoveWatermark(root));
   q('#labWatermarkAll', root)?.addEventListener('change', (event) => {
     state.form.watermarkAll = event.target.checked;
@@ -1538,10 +1542,105 @@ function paintRemoveWatermarkHint(root) {
   }
   const terms = removeWatermarkTerms();
   if (!terms.length) {
-    hint.textContent = `${source.name} — type or pick the watermark text.`;
+    hint.textContent = `${source.name} — type or pick the watermark text, or click "Guess".`;
     return;
   }
   hint.textContent = `${source.name} — ${terms.length} term${terms.length === 1 ? '' : 's'}. Click "Scan for matches" to see what Folio will cover.`;
+}
+
+/* Look at every page and find the text that appears most often at the
+   same position. That is almost always the watermark: a "DRAFT" or
+   "CONFIDENTIAL" stamp is on every page in the same place, while
+   normal body text is on at most one page. We rank candidates by
+   (page count) × (runs) × (position-consistency bonus), then break
+   ties by preferring the longest string. Position consistency is the
+   decisive signal: a watermark sits at one Y across the document,
+   a page heading moves. Returns the best candidate or null when
+   nothing stands out. */
+async function guessWatermarkText(root) {
+  const source = removeWatermarkSource(root);
+  if (!source) { toast('Pick a source file first.'); return; }
+  const hint = q('#labRemoveWatermarkHint', root);
+  if (hint) hint.textContent = 'Looking for a stamp that repeats on every page…';
+  const doc = await openPdfDocument(source.buffer.slice(0));
+  try {
+    const pages = doc.numPages;
+    if (pages < 2) {
+      if (hint) hint.textContent = 'A watermark guess needs at least two pages to compare.';
+      return;
+    }
+    /* Per-page run list: [{ text, y, x }, ...] in the order pdf.js hands
+       them back. We keep raw y/x so the position-consistency check is
+       exact (within 2 pt). */
+    const perPage = [];
+    let totalRuns = 0;
+    for (let i = 0; i < pages; i += 1) {
+      const page = await doc.getPage(i + 1);
+      const content = await page.getTextContent();
+      const runs = [];
+      for (const item of content.items) {
+        if (typeof item.str !== 'string') continue;
+        const t = item.str.trim();
+        if (!t || t.length < 2) continue;
+        runs.push({ text: t, y: Math.round(item.transform[5]), x: Math.round(item.transform[4]) });
+        totalRuns += 1;
+      }
+      perPage.push(runs);
+      page.cleanup();
+    }
+    if (!totalRuns) {
+      if (hint) hint.textContent = 'No text layer — the PDF is probably a scanned image.';
+      return;
+    }
+    /* Aggregate: how many pages, how many runs, and how often the same
+       (y, x) position is reused. */
+    const scores = new Map();
+    for (const runs of perPage) {
+      for (const { text, y, x } of runs) {
+        const key = `${y}|${x}`;
+        const entry = scores.get(text) || { pages: 0, runs: 0, positions: new Map() };
+        entry.pages += 1;
+        entry.runs += 1;
+        entry.positions.set(key, (entry.positions.get(key) || 0) + 1);
+        scores.set(text, entry);
+      }
+    }
+    const candidates = [];
+    for (const [text, { pages: pageCount, runs, positions }] of scores) {
+      if (pageCount < 2) continue;
+      /* The decisive signal is position consistency: a watermark sits
+         at the same y/x on every page, so the most-frequent position
+         accounts for ~all of the page count. Body text varies. */
+      const topPosition = Math.max(...positions.values());
+      const consistency = topPosition / pageCount;
+      /* Only consider texts that appear at the SAME position on at
+         least 60% of pages. That filters out body text, footers that
+         change per page, etc. */
+      if (consistency < 0.6) continue;
+      /* Score: page count dominates, with a small length bonus to
+         break ties (a single letter "a" that happens to repeat isn't
+         a watermark). */
+      const lengthBonus = 1 + Math.min(text.length, 24) / 48;
+      const score = pageCount * lengthBonus;
+      candidates.push({ text, score, pages: pageCount, runs, consistency });
+    }
+    if (!candidates.length) {
+      if (hint) hint.textContent = 'No text repeats across pages — pick a term manually.';
+      return;
+    }
+    candidates.sort((a, b) => b.score - a.score || b.text.length - a.text.length);
+    const guess = candidates[0];
+    state.form.removeWatermarkText = guess.text;
+    const input = q('#labRemoveWatermarkText', root);
+    if (input) input.value = guess.text;
+    paintRemoveWatermarkHint(root);
+    if (hint) hint.textContent = `Guessed: "${guess.text}" — on ${guess.pages} of ${pages} page${pages === 1 ? '' : 's'}. Click "Scan for matches" to verify.`;
+  } catch (err) {
+    console.error('remove-watermark: guess failed', err);
+    if (hint) hint.textContent = 'The text layer could not be read — the PDF may be a scanned image.';
+  } finally {
+    await doc.destroy();
+  }
 }
 
 async function scanRemoveWatermark(root) {
