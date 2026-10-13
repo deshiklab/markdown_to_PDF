@@ -1190,6 +1190,7 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 .pf-exif-note { font-size: 9px; color: #8a8e80; padding: 4px 0 0; }
 .pf-exif-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .pf-exif-actions .button { flex: 1 1 auto; min-width: 0; justify-content: center; }
+.pf-exif-empty { margin: 4px 0 0; padding: 10px 12px; border: 1px dashed #d8d3c2; border-radius: 8px; background: #f5f3eb; color: #6a7064; font-size: 10px; line-height: 1.5; text-align: center; }
 .pf-exif-write { border-top: 1px solid #e7e3d4; padding-top: 8px; }
 .pf-exif-write summary { font-size: 10px; color: #5f6a5e; cursor: pointer; padding: 4px 0; }
 .pf-exif-write[open] summary { font-weight: 600; color: #292e23; }

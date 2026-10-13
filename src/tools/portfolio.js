@@ -102,6 +102,7 @@ function layout() {
         <span class="pf-exif-count" id="pfExifCount">no photos yet</span>
       </div>
       <p class="lab-help">Camera files often carry a GPS pin, the device's serial, and a timestamp. Read what's on each photo, then strip what you don't want shown, or write your own name and a copyright line in.</p>
+      <p class="pf-exif-empty" id="pfExifEmpty">Add photos above to read their EXIF and decide what to strip.</p>
       <ul class="pf-exif-list" id="pfExifList" role="list"></ul>
       <div class="pf-exif-actions">
         <button class="button button-light" type="button" id="pfExifReadAll">Read all</button>
@@ -820,10 +821,14 @@ function paintExifEmptyState(root) {
   const list = q('#pfExifList', root);
   const actions = q('.pf-exif-actions', root);
   const help = q('.pf-exif .lab-help', root);
-  const empty = state.photos.length === 0;
-  if (list) list.hidden = empty;
-  if (actions) actions.hidden = empty;
-  if (help) help.hidden = empty;
+  const write = q('.pf-exif-write', root);
+  const empty = q('#pfExifEmpty', root);
+  const isEmpty = state.photos.length === 0;
+  if (list) list.hidden = isEmpty;
+  if (actions) actions.hidden = isEmpty;
+  if (help) help.hidden = isEmpty;
+  if (write) write.hidden = isEmpty;
+  if (empty) empty.hidden = !isEmpty;
 }
 
 function stripExifAll(root) { toast('Strip-all writer is the next commit.'); }
