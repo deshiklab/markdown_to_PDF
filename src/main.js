@@ -34,6 +34,7 @@ const tools = {
   forms: () => import('./tools/forms.js'),
   sign: () => import('./tools/sign.js'),
   letterhead: () => import('./tools/letterhead.js'),
+  invoices: () => import('./tools/invoices.js'),
 };
 
 window.startFolioApp({
