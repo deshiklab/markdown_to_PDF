@@ -33,6 +33,7 @@ const tools = {
   finish: () => import('./tools/finish.js'),
   forms: () => import('./tools/forms.js'),
   sign: () => import('./tools/sign.js'),
+  letterhead: () => import('./tools/letterhead.js'),
 };
 
 window.startFolioApp({

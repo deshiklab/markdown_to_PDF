@@ -3,7 +3,7 @@
 import { el, q, qa, store } from './lib.js';
 import { mountControls, printSheet } from './page.js';
 
-const TOOL_IDS = ['markdown', 'pdf-lab', 'translate', 'convert', 'portfolio', 'finish', 'forms', 'sign'];
+const TOOL_IDS = ['markdown', 'pdf-lab', 'translate', 'convert', 'portfolio', 'finish', 'forms', 'sign', 'letterhead'];
 const LABELS = {
   markdown: 'Markdown to PDF',
   'pdf-lab': 'PDF Lab',
