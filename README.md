@@ -2,6 +2,8 @@
 
 A small, private, browser-based document studio. Write Markdown and export it as a PDF, stitch PDFs together, translate a document line by line, turn a folder of photos into a printed-looking portfolio, swap between photos, pages and text, and give a document its last pass before it goes out. Every tool runs in the browser: no upload, no account, no server round-trip.
 
+**Live preview:** <https://deshiklab.github.io/markdown_to_PDF/> — pushed from the `arena/79a64710-markdown-to-pdf` branch by the `Deploy Folio preview` workflow.
+
 ## What is in it
 
 | Tab | What it does | Where the work happens |
