@@ -38,6 +38,55 @@ const TEMPLATES = [
   { id: 'minimal', label: 'Minimal', note: 'Plain type, thin rules, single line footer.' },
 ];
 
+/* Curated currency list. Each entry is { code, symbol, name }.
+   `symbol` is what formatMoney() prepends. `CURRENCY_SYMBOLS` is the
+   set of pre-listed symbols, used to detect when a stored currency
+   doesn't match one of the popular ones (e.g. a user-typed custom
+   value, or a symbol that collides with another entry — see how
+   "kr" is shared by SEK, NOK and DKK). The trailing "Custom…" option
+   in the dropdown is rendered in the layout, not here. */
+const CURRENCIES = [
+  { code: 'USD', symbol: '$', name: 'US Dollar' },
+  { code: 'EUR', symbol: '€', name: 'Euro' },
+  { code: 'GBP', symbol: '£', name: 'Pound Sterling' },
+  { code: 'BDT', symbol: '৳', name: 'Taka' },
+  { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+  { code: 'PKR', symbol: '₨', name: 'Pakistani Rupee' },
+  { code: 'LKR', symbol: 'Rs', name: 'Sri Lankan Rupee' },
+  { code: 'NPR', symbol: 'रू', name: 'Nepalese Rupee' },
+  { code: 'JPY', symbol: '¥', name: 'Japanese Yen' },
+  { code: 'CNY', symbol: '¥', name: 'Chinese Yuan' },
+  { code: 'KRW', symbol: '₩', name: 'South Korean Won' },
+  { code: 'AUD', symbol: 'A$', name: 'Australian Dollar' },
+  { code: 'NZD', symbol: 'NZ$', name: 'New Zealand Dollar' },
+  { code: 'CAD', symbol: 'C$', name: 'Canadian Dollar' },
+  { code: 'CHF', symbol: 'CHF', name: 'Swiss Franc' },
+  { code: 'SGD', symbol: 'S$', name: 'Singapore Dollar' },
+  { code: 'HKD', symbol: 'HK$', name: 'Hong Kong Dollar' },
+  { code: 'AED', symbol: 'د.إ', name: 'UAE Dirham' },
+  { code: 'SAR', symbol: '﷼', name: 'Saudi Riyal' },
+  { code: 'MYR', symbol: 'RM', name: 'Malaysian Ringgit' },
+  { code: 'THB', symbol: '฿', name: 'Thai Baht' },
+  { code: 'IDR', symbol: 'Rp', name: 'Indonesian Rupiah' },
+  { code: 'PHP', symbol: '₱', name: 'Philippine Peso' },
+  { code: 'VND', symbol: '₫', name: 'Vietnamese Dong' },
+  { code: 'BRL', symbol: 'R$', name: 'Brazilian Real' },
+  { code: 'MXN', symbol: 'Mex$', name: 'Mexican Peso' },
+  { code: 'ZAR', symbol: 'R', name: 'South African Rand' },
+  { code: 'NGN', symbol: '₦', name: 'Nigerian Naira' },
+  { code: 'KES', symbol: 'KSh', name: 'Kenyan Shilling' },
+  { code: 'TRY', symbol: '₺', name: 'Turkish Lira' },
+  { code: 'RUB', symbol: '₽', name: 'Russian Ruble' },
+  { code: 'SEK', symbol: 'kr', name: 'Swedish Krona' },
+  { code: 'NOK', symbol: 'kr', name: 'Norwegian Krone' },
+  { code: 'DKK', symbol: 'kr', name: 'Danish Krone' },
+  { code: 'PLN', symbol: 'zł', name: 'Polish Zloty' },
+  { code: 'CZK', symbol: 'Kč', name: 'Czech Koruna' },
+  { code: 'HUF', symbol: 'Ft', name: 'Hungarian Forint' },
+  { code: 'ILS', symbol: '₪', name: 'Israeli Shekel' },
+];
+const CURRENCY_SYMBOLS = new Set(CURRENCIES.map((c) => c.symbol));
+
 const identityDefaults = {
   layout: 'classic',
   companyName: 'Acme Studio',
@@ -145,7 +194,13 @@ function layout() {
           <input class="text-input" id="invNumber" type="text" value="${escapeHtml(form.number)}" />
         </label>
         <label class="field"><span class="field-label">Currency</span>
-          <input class="text-input" id="invCurrency" type="text" value="${escapeHtml(form.currency)}" maxlength="3" />
+          <select class="text-input" id="invCurrency">
+            ${CURRENCIES.map((c) => `<option value="${escapeHtml(c.symbol)}">${escapeHtml(c.symbol)}  ${escapeHtml(c.code)}  —  ${escapeHtml(c.name)}</option>`).join('')}
+            <option value="__custom__">Custom…</option>
+          </select>
+        </label>
+        <label class="field" id="invCurrencyCustomWrap" hidden><span class="field-label">Custom symbol</span>
+          <input class="text-input" id="invCurrencyCustom" type="text" value="${escapeHtml(form.currency)}" maxlength="6" placeholder="e.g. kr, د.ك, R" />
         </label>
       </div>
       <div class="lh-grid">
@@ -305,7 +360,20 @@ function layout() {
 
 function paintForm(root) {
   q('#invNumber', root).value = state.form.number;
-  q('#invCurrency', root).value = state.form.currency;
+  /* Currency: a select with the curated list, plus a "Custom" path that
+     reveals a small text input. If the stored value isn't in the curated
+     list — or collides with another entry (e.g. SEK/NOK/DKK all use
+     "kr") — fall back to Custom so the user can disambiguate. */
+  const select = q('#invCurrency', root);
+  const customWrap = q('#invCurrencyCustomWrap', root);
+  const customInput = q('#invCurrencyCustom', root);
+  if (select) {
+    const matches = Array.from(select.options).filter((opt) => opt.value === state.form.currency);
+    const unique = matches.length === 1 ? matches[0] : null;
+    select.value = unique ? unique.value : '__custom__';
+  }
+  if (customWrap) customWrap.hidden = !select || select.value !== '__custom__';
+  if (customInput) customInput.value = state.form.currency || '';
   q('#invIssueDate', root).value = state.form.issueDate;
   q('#invDueDate', root).value = state.form.dueDate;
   q('#invTemplate', root).value = state.form.template;
@@ -552,7 +620,6 @@ function formatMoney(n, currency) {
 function wireForm(root) {
   const fields = [
     ['#invNumber', 'number'],
-    ['#invCurrency', 'currency'],
     ['#invIssueDate', 'issueDate'],
     ['#invDueDate', 'dueDate'],
     ['#invTemplate', 'template'],
@@ -568,6 +635,34 @@ function wireForm(root) {
       paintPreview(root);
     });
   }
+  /* Currency has its own wiring because the dropdown's "Custom…" option
+     needs to reveal a text input, and the per-line "amount" suffix in the
+     discount-type select also reads state.form.currency. */
+  const currency = q('#invCurrency', root);
+  const customWrap = q('#invCurrencyCustomWrap', root);
+  const customInput = q('#invCurrencyCustom', root);
+  currency?.addEventListener('change', () => {
+    if (currency.value === '__custom__') {
+      if (customWrap) customWrap.hidden = false;
+      const next = (customInput?.value || '').trim();
+      state.form.currency = next || (customInput ? '' : '');
+      customInput?.focus();
+    } else {
+      if (customWrap) customWrap.hidden = true;
+      state.form.currency = currency.value;
+    }
+    save();
+    paintLines(root);
+    paintTotals(root);
+    paintPreview(root);
+  });
+  customInput?.addEventListener('input', () => {
+    state.form.currency = (customInput.value || '').trim();
+    save();
+    paintLines(root);
+    paintTotals(root);
+    paintPreview(root);
+  });
   const tax = q('#invTaxRate', root);
   tax?.addEventListener('input', () => {
     state.form.taxRate = Number(tax.value || 0);
@@ -1324,5 +1419,34 @@ async function withBusy(root, buttonId, label, work) {
   }
 }
 
+/* Test-only helpers — let tests mutate state without going through the
+   input events (so the test can set up a known currency and then verify
+   paintForm picks the right option). */
+function setState(patch) {
+  if (!patch) return;
+  for (const k of Object.keys(patch)) state.form[k] = patch[k];
+}
+function getState() { return state; }
+
 /* Test-only handle. */
-export const __test = { state, paintLines, paintTotals, paintPreview, paintForm, paintClients, paintTemplates, lineTotals, computeTotals, lineDiscountAmount, invoiceDiscountAmount, conversionLine };
+export const __test = {
+  state,
+  layout,
+  paintForm,
+  paintLines,
+  paintTotals,
+  paintPreview,
+  paintClients,
+  paintTemplates,
+  wireForm,
+  formatMoney,
+  setState,
+  getState,
+  lineTotals,
+  computeTotals,
+  lineDiscountAmount,
+  invoiceDiscountAmount,
+  conversionLine,
+  CURRENCIES,
+  CURRENCY_SYMBOLS,
+};
