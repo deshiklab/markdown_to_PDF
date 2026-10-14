@@ -459,13 +459,7 @@ function lineRowHtml(line, i) {
           <input class="text-input inv-line-discount-value" data-field="discountValue" type="number" min="0" step="0.01" value="${line.discountValue || 0}" />
         </span>
       </label>
-      <div class="inv-line-sub"><span class="field-label">Net</span>
-        <output>${formatMoney(net, state.form.currency)}</output>
-      </div>
-      <div class="inv-line-sub inv-line-tax-out"><span class="field-label">Tax</span>
-        <output>${formatMoney(tax, state.form.currency)}</output>
-      </div>
-      <div class="inv-line-sub inv-line-gross"><span class="field-label">Total</span>
+      <div class="inv-line-total"><span class="field-label">Total</span>
         <output>${formatMoney(gross, state.form.currency)}</output>
       </div>
       <button class="button button-light inv-line-remove" data-field="remove" type="button" aria-label="Remove line">×</button>
@@ -539,10 +533,8 @@ function onLineChange() {
     const line = state.lines[i];
     if (!line) return;
     const t = lineTotals(line);
-    const subs = row.querySelectorAll('.inv-line-sub output');
-    if (subs[0]) subs[0].textContent = formatMoney(t.net, state.form.currency);
-    if (subs[1]) subs[1].textContent = formatMoney(t.tax, state.form.currency);
-    if (subs[2]) subs[2].textContent = formatMoney(t.gross2, state.form.currency);
+    const out = row.querySelector('.inv-line-total output');
+    if (out) out.textContent = formatMoney(t.gross2, state.form.currency);
   });
   paintTotals(root);
   paintPreview(root);
