@@ -374,6 +374,36 @@ export function startShell({ loaders } = {}) {
 
   if (initial !== 'markdown') mountTool(initial, loaders);
 
+  /* Focus mode — hide the brand bar, the tab strip, the shared page-strip
+     and the footer, leaving just the active tool on screen. Toggle from the
+     floating Focus button, exit with Esc, the Exit button, or any tab switch
+     (because switching tabs in focus mode without the strip would leave the
+     user stranded on a tab they can't see). */
+  const focusToggle = q('#focusToggle');
+  const focusExit = q('#focusExit');
+  const setFocus = (on) => {
+    document.body.dataset.focus = on ? 'on' : 'off';
+    if (focusToggle) focusToggle.hidden = !!on;
+    if (focusExit) focusExit.hidden = !on;
+  };
+  focusToggle?.addEventListener('click', () => setFocus(true));
+  focusExit?.addEventListener('click', () => setFocus(false));
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && document.body.dataset.focus === 'on') {
+      event.preventDefault();
+      setFocus(false);
+    }
+  });
+  /* Switching tabs while focused would strand the user — exit focus so the
+     tab strip is visible again. */
+  const exitFocus = () => { if (document.body.dataset.focus === 'on') setFocus(false); };
+  window.addEventListener('hashchange', exitFocus);
+  document.addEventListener('click', (event) => {
+    if (document.body.dataset.focus !== 'on') return;
+    const tab = event.target instanceof Element ? event.target.closest('.tool-tab') : null;
+    if (tab) exitFocus();
+  });
+
   const idle = window.requestIdleCallback ?? ((fn) => window.setTimeout(fn, 1400));
   idle(() => {
     const next = TOOL_IDS.find((id) => id !== state.active && typeof loaders?.[id] === 'function');
