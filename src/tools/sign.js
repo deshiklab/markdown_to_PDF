@@ -56,6 +56,12 @@ const defaults = {
   ruleB: 'dotted',
   dateA: 'today',
   dateB: 'today',
+  dateCustomA: '',
+  dateCustomB: '',
+  reasonA: '',
+  reasonB: '',
+  locationA: '',
+  locationB: '',
   captionSize: 8.5,
   captionInk: '#6b7368',
   textInk: '#16161a',
@@ -253,7 +259,10 @@ function partyForm(key) {
       <label class="field"><span class="field-label">Name under the line</span><input class="text-input" type="text" data-field="${key === 'a' ? 'nameA' : 'nameB'}" value="${escapeHtml(state.form[key === 'a' ? 'nameA' : 'nameB'])}" placeholder="Deshika Rahman" autocomplete="off" /></label>
       <label class="field"><span class="field-label">Title</span><input class="text-input" type="text" data-field="${key === 'a' ? 'titleA' : 'titleB'}" value="${escapeHtml(state.form[key === 'a' ? 'titleA' : 'titleB'])}" placeholder="Director, Studio" autocomplete="off" /></label>
       <label class="field"><span class="field-label">Line</span><select class="text-input" data-field="${key === 'a' ? 'ruleA' : 'ruleB'}"><option value="none">nothing</option><option value="dotted"${state.form[key === 'a' ? 'ruleA' : 'ruleB'] === 'dotted' ? ' selected' : ''}>dotted</option><option value="solid"${state.form[key === 'a' ? 'ruleA' : 'ruleB'] === 'solid' ? ' selected' : ''}>solid</option></select></label>
-      <label class="field"><span class="field-label">Date</span><select class="text-input" data-field="${key === 'a' ? 'dateA' : 'dateB'}"><option value="none"${state.form[key === 'a' ? 'dateA' : 'dateB'] === 'none' ? ' selected' : ''}>no date</option><option value="today"${state.form[key === 'a' ? 'dateA' : 'dateB'] === 'today' ? ' selected' : ''}>today</option><option value="beside"${state.form[key === 'a' ? 'dateA' : 'dateB'] === 'beside' ? ' selected' : ''}>today, on the right</option></select></label>
+      <label class="field"><span class="field-label">Date</span><select class="text-input" data-field="${key === 'a' ? 'dateA' : 'dateB'}"><option value="none"${state.form[key === 'a' ? 'dateA' : 'dateB'] === 'none' ? ' selected' : ''}>no date</option><option value="today"${state.form[key === 'a' ? 'dateA' : 'dateB'] === 'today' ? ' selected' : ''}>today</option><option value="beside"${state.form[key === 'a' ? 'dateA' : 'dateB'] === 'beside' ? ' selected' : ''}>today, on the right</option><option value="withTime"${state.form[key === 'a' ? 'dateA' : 'dateB'] === 'withTime' ? ' selected' : ''}>with time</option><option value="custom"${state.form[key === 'a' ? 'dateA' : 'dateB'] === 'custom' ? ' selected' : ''}>custom…</option></select></label>
+      <label class="field sg-date-custom" data-sg-date-custom="${key}" ${state.form[key === 'a' ? 'dateA' : 'dateB'] === 'custom' ? '' : 'hidden'}><span class="field-label">Custom date</span><input class="text-input" type="text" data-field="${key === 'a' ? 'dateCustomA' : 'dateCustomB'}" value="${escapeHtml(state.form[key === 'a' ? 'dateCustomA' : 'dateCustomB'] || '')}" placeholder="e.g. 14 Sep 2026, 16:24" autocomplete="off" /></label>
+      <label class="field"><span class="field-label">Reason</span><input class="text-input" type="text" data-field="${key === 'a' ? 'reasonA' : 'reasonB'}" value="${escapeHtml(state.form[key === 'a' ? 'reasonA' : 'reasonB'] || '')}" placeholder="I agree to the terms" autocomplete="off" /></label>
+      <label class="field"><span class="field-label">Location</span><input class="text-input" type="text" data-field="${key === 'a' ? 'locationA' : 'locationB'}" value="${escapeHtml(state.form[key === 'a' ? 'locationA' : 'locationB'] || '')}" placeholder="Dhaka, BD" autocomplete="off" /></label>
       <div class="field">
         <span class="field-label">Snap to</span>
         <div class="lab-pos-grid sg-pos-grid" role="group" aria-label="${party.short} position">
@@ -312,6 +321,13 @@ function wire(root) {
     const handler = () => {
       state.form[node.dataset.field] = node.type === 'number' ? Number(node.value) : node.value;
       save();
+      /* When the Date control flips to/from "custom…", show or hide the
+         custom-date input beside it. */
+      if (node.dataset.field === 'dateA' || node.dataset.field === 'dateB') {
+        const key = node.dataset.field === 'dateA' ? 'a' : 'b';
+        const custom = q(`[data-sg-date-custom="${key}"]`, root);
+        if (custom) custom.hidden = node.value !== 'custom';
+      }
       // only a page change needs a new bitmap; sizes and captions are overlay maths
       if (node.dataset.field.startsWith('page')) {
         clampPages(root);
@@ -816,7 +832,24 @@ function blockHeight(key) {
   const rule = state.form[key === 'a' ? 'ruleA' : 'ruleB'];
   const name = (state.form[key === 'a' ? 'nameA' : 'nameB'] || (rule === 'none' ? '' : mark?.name) || '').trim();
   const title = (state.form[key === 'a' ? 'titleA' : 'titleB'] || '').trim();
-  return markHeight + (rule === 'none' ? 0 : 8) + (name ? 11 : 0) + (title ? 9.5 : 0) + 2;
+  const reason = (state.form[key === 'a' ? 'reasonA' : 'reasonB'] || '').trim();
+  const location = (state.form[key === 'a' ? 'locationA' : 'locationB'] || '').trim();
+  const date = state.form[key === 'a' ? 'dateA' : 'dateB'];
+  const captionSize = Number(state.form.captionSize) || 8.5;
+  let cap = 0;
+  if (name) cap += captionSize + 3;
+  if (title) cap += captionSize + 2;
+  if (reason) cap += captionSize + 1;
+  if (location) cap += captionSize + 1;
+  if (date !== 'none' && date !== 'beside') {
+    /* "withTime" and "custom" always go on their own line under the
+       other captions. "today" only takes its own line when nothing else
+       is shown. */
+    if (date === 'withTime' || date === 'custom' || (!name && !title && !reason && !location)) {
+      cap += captionSize;
+    }
+  }
+  return markHeight + (rule === 'none' ? 0 : 8) + cap + 2;
 }
 
 function snapTo(key, position, root) {
@@ -1022,20 +1055,35 @@ function paintSeal(root) {
     const width = Math.round(Number(state.form[key === 'a' ? 'widthA' : 'widthB']) || 120);
     const name = (state.form[key === 'a' ? 'nameA' : 'nameB'] || '').trim();
     const title = (state.form[key === 'a' ? 'titleA' : 'titleB'] || '').trim();
+    const reason = (state.form[key === 'a' ? 'reasonA' : 'reasonB'] || '').trim();
+    const location = (state.form[key === 'a' ? 'locationA' : 'locationB'] || '').trim();
     const rule = state.form[key === 'a' ? 'ruleA' : 'ruleB'];
     const date = state.form[key === 'a' ? 'dateA' : 'dateB'];
-    return { key, mark, page, width, name, title, rule, date, x: Math.round(blocks[key].x), y: Math.round(blocks[key].y) };
+    const customDate = (state.form[key === 'a' ? 'dateCustomA' : 'dateCustomB'] || '').trim();
+    return { key, mark, page, width, name, title, reason, location, rule, date, customDate, x: Math.round(blocks[key].x), y: Math.round(blocks[key].y) };
   });
   if (box) {
     box.replaceChildren(
-      ...lines.map((line) =>
-        el('div', { class: `sg-summary-row${line.mark ? '' : ' is-empty'}` }, [
+      ...lines.map((line) => {
+        const dateLabel = line.date === 'none' ? null
+          : line.date === 'beside' ? 'date at the right'
+          : line.date === 'withTime' ? 'date + time under'
+          : line.date === 'custom' ? (line.customDate ? `custom date: ${line.customDate}` : 'custom date (empty)')
+          : 'date under';
+        const underBits = [
+          line.name || (line.rule !== 'none' ? 'the mark’s own name' : ''),
+          line.title,
+          line.reason,
+          line.location,
+          dateLabel,
+        ].filter(Boolean).join(' · ') || 'no caption';
+        return el('div', { class: `sg-summary-row${line.mark ? '' : ' is-empty'}` }, [
           el('span', { class: 'sg-summary-who', text: PARTY[line.key].title }),
           el('span', { class: 'sg-summary-mark', text: line.mark ? line.mark.name : 'nothing chosen' }),
           el('span', { class: 'sg-summary-where', text: line.mark ? `page ${line.page} · ${line.width}pt wide · ${line.x}×${line.y} pt from the top left` : 'add a mark in the pad panel' }),
-          el('span', { class: 'sg-summary-under', text: [line.name || (line.rule !== 'none' ? 'the mark’s own name' : ''), line.title, line.date !== 'none' ? (line.date === 'beside' ? 'date at the right' : 'date under') : ''].filter(Boolean).join(' · ') || 'no caption' }),
-        ]),
-      ),
+          el('span', { class: 'sg-summary-under', text: underBits }),
+        ]);
+      }),
     );
   }
   if (hint) {
@@ -1049,8 +1097,24 @@ function paintSeal(root) {
   if (button) button.disabled = !state.buffer || !lines.some((line) => line.mark);
 }
 
+/* "14 Sep 2026" — used by the old date modes. */
 function dateText() {
   return new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+/* "14 Sep 2026, 16:24" — used by the "with time" mode. */
+function dateWithTimeText() {
+  return new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+/* Render the date string for one party, given the current Date control value
+   and the per-party custom override. Returns '' when no date should be drawn. */
+function dateString(key) {
+  const value = state.form[key === 'a' ? 'dateA' : 'dateB'];
+  if (value === 'none') return '';
+  if (value === 'custom') return (state.form[key === 'a' ? 'dateCustomA' : 'dateCustomB'] || '').trim();
+  if (value === 'withTime') return dateWithTimeText();
+  return dateText();
 }
 
 async function sign(root) {
@@ -1114,14 +1178,21 @@ async function drawSignatures(plans) {
     }
     const name = (state.form[key === 'a' ? 'nameA' : 'nameB'] || (rule === 'none' ? '' : plan.mark.name) || '').trim();
     const title = (state.form[key === 'a' ? 'titleA' : 'titleB'] || '').trim();
-    const date = state.form[key === 'a' ? 'dateA' : 'dateB'];
+    const reason = (state.form[key === 'a' ? 'reasonA' : 'reasonB'] || '').trim();
+    const location = (state.form[key === 'a' ? 'locationA' : 'locationB'] || '').trim();
+    const dateMode = state.form[key === 'a' ? 'dateA' : 'dateB'];
+    const dateTextForParty = dateString(key);
     const captionSize = Number(state.form.captionSize) || 8.5;
     if (name) {
       drawText(blocks[key].x, cursor - captionSize, name, { size: captionSize, font: bold, color: rgb(...captionInk) });
-      if (date === 'beside') {
-        const text = dateText();
-        const offset = Math.max(0, plan.width - font.widthOfTextAtSize(text, captionSize));
-        drawText(blocks[key].x + offset, cursor - captionSize, text, { size: captionSize, font, color: rgb(...captionInk) });
+      /* 'beside' always places the date to the right of the name. 'today'
+         does the same when the user has supplied a name and there's no
+         reason/location to push the date below. */
+      const placeBeside = dateMode === 'beside'
+        || (dateMode === 'today' && dateTextForParty && !reason && !location);
+      if (placeBeside && dateTextForParty) {
+        const offset = Math.max(0, plan.width - font.widthOfTextAtSize(dateTextForParty, captionSize));
+        drawText(blocks[key].x + offset, cursor - captionSize, dateTextForParty, { size: captionSize, font, color: rgb(...captionInk) });
       }
       cursor -= captionSize + 3;
     }
@@ -1129,8 +1200,23 @@ async function drawSignatures(plans) {
       drawText(blocks[key].x, cursor - (captionSize - 1), title, { size: captionSize - 1, font, color: rgb(...captionInk) });
       cursor -= captionSize + 2;
     }
-    if (date === 'today' && !name && !title) {
-      drawText(blocks[key].x, cursor - captionSize, dateText(), { size: captionSize, font, color: rgb(...captionInk) });
+    if (reason) {
+      drawText(blocks[key].x, cursor - (captionSize - 1.5), reason, { size: captionSize - 1.5, font, color: rgb(...captionInk) });
+      cursor -= captionSize + 1;
+    }
+    if (location) {
+      drawText(blocks[key].x, cursor - (captionSize - 1.5), location, { size: captionSize - 1.5, font, color: rgb(...captionInk) });
+      cursor -= captionSize + 1;
+    }
+    /* "with time" and "custom" always go on their own line under the
+       other captions. "today" only takes its own line when nothing else
+       is shown and the date isn't already being drawn beside the name. */
+    const todayPlacedBeside = name && dateMode === 'today' && !reason && !location;
+    const dateWantsOwnLine = dateMode === 'withTime' || dateMode === 'custom'
+      || (dateMode === 'today' && !name && !title && !reason && !location)
+      || (dateMode === 'today' && !todayPlacedBeside && (title || reason || location));
+    if (dateTextForParty && dateWantsOwnLine) {
+      drawText(blocks[key].x, cursor - captionSize, dateTextForParty, { size: captionSize, font, color: rgb(...captionInk) });
     }
   }
   return doc.save({ useObjectStreams: false });
@@ -1251,3 +1337,7 @@ async function withBusy(root, id, label, work) {
     paintSeal(root);
   }
 }
+
+/* Test-only handle: lets the jsdom test reach into the same module
+   instance. Not part of the public API. */
+export const __test = { state, defaults, addImageMark, sign, dateString, dateText, dateWithTimeText, markFor, blockHeight, blocks };
