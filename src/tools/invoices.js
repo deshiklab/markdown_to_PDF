@@ -36,6 +36,7 @@ const TEMPLATES = [
   { id: 'classic', label: 'Classic', note: 'Accent rule, banded table, footer columns.' },
   { id: 'modern', label: 'Modern', note: 'Side rule, right-aligned INVOICE, generous spacing.' },
   { id: 'minimal', label: 'Minimal', note: 'Plain type, thin rules, single line footer.' },
+  { id: 'receipt', label: 'Receipt', note: 'RECEIPT title, no tax or balance-due, optional QR + barcode.' },
 ];
 
 /* Curated currency list. Each entry is { code, symbol, name }.
@@ -116,6 +117,8 @@ const invoiceDefaults = {
   paidDate: '',
   discountType: 'none', /* 'none' | 'percent' | 'amount' */
   discountValue: 0,
+  qrPayload: '', /* free-text payload rendered as a QR on the receipt template */
+  barcodePayload: '', /* free-text payload rendered as a Code 128 barcode on the receipt template */
 };
 
 const blankClient = {
@@ -149,6 +152,7 @@ const state = {
   logo: null,
   busy: false,
   lines: [blankLine()],
+  codeImgs: { qr: '', barcode: '' }, /* data URLs, populated by refreshCodeImgs() */
 };
 
 function save() { prefsStore.write(state.form); }
@@ -167,11 +171,15 @@ export function start(root) {
   wireDeposit(root);
   wireInvoiceDiscount(root);
   wireCurrency(root);
+  wireCodeFields(root);
   paintForm(root);
   paintClients(root);
   paintLines(root);
   paintTotals(root);
-  paintPreview(root);
+  /* Render the QR + barcode data URLs (no-op in Node / tests) before
+     the first paint so the preview shows them when the template is
+     receipt. */
+  refreshCodeImgs().then(() => paintPreview(root));
   return () => {};
 }
 
@@ -263,6 +271,16 @@ function layout() {
             <input class="text-input" id="invPaidDate" type="date" value="${escapeHtml(form.paidDate || '')}" />
           </label>
         </div>
+      </div>
+
+      <div class="inv-section">
+        <div class="inv-section-head"><h4>QR + barcode</h4><span class="lh-hint">Receipt template only</span></div>
+        <label class="field"><span class="field-label">QR payload</span>
+          <input class="text-input" id="invQrPayload" type="text" value="${escapeHtml(form.qrPayload || '')}" placeholder="A URL, a JSON ID, anything scannable" maxlength="2000" />
+        </label>
+        <label class="field"><span class="field-label">Barcode payload (Code 128)</span>
+          <input class="text-input" id="invBarcodePayload" type="text" value="${escapeHtml(form.barcodePayload || '')}" placeholder="e.g. INV-001" maxlength="80" />
+        </label>
       </div>
 
       <label class="field"><span class="field-label">Notes / payment terms</span>
@@ -385,6 +403,8 @@ function paintForm(root) {
   q('#invDiscountValue', root).value = state.form.discountValue || 0;
   q('#invPaid', root).value = state.form.paid || 0;
   q('#invPaidDate', root).value = state.form.paidDate || '';
+  q('#invQrPayload', root).value = state.form.qrPayload || '';
+  q('#invBarcodePayload', root).value = state.form.barcodePayload || '';
   q('#invNotes', root).value = state.form.notes;
   q('#invSaveName', root).value = state.form.saveName;
   q('#invClientName', root).value = state.clientDraft.name;
@@ -632,7 +652,13 @@ function wireForm(root) {
     el.addEventListener('input', () => {
       state.form[key] = el.value;
       save();
-      paintPreview(root);
+      /* The template change affects the code images, so refresh them
+         before re-painting the preview. */
+      if (key === 'template') {
+        refreshCodeImgs().then(() => paintPreview(root));
+      } else {
+        paintPreview(root);
+      }
     });
   }
   /* Currency has its own wiring because the dropdown's "Custom…" option
@@ -722,6 +748,25 @@ function wireDeposit(root) {
     save();
     paintTotals(root);
     paintPreview(root);
+  });
+}
+
+function wireCodeFields(root) {
+  /* QR + barcode payloads. They're free-text fields, stored verbatim.
+     They only appear in the rendered PDF when the receipt template is
+     selected, but the inputs are always visible so the user can fill
+     them in before switching templates. */
+  const qr = q('#invQrPayload', root);
+  qr?.addEventListener('input', () => {
+    state.form.qrPayload = qr.value;
+    save();
+    refreshCodeImgs().then(() => paintPreview(root));
+  });
+  const bc = q('#invBarcodePayload', root);
+  bc?.addEventListener('input', () => {
+    state.form.barcodePayload = bc.value;
+    save();
+    refreshCodeImgs().then(() => paintPreview(root));
   });
 }
 
@@ -941,6 +986,47 @@ async function exportInvoice(root) {
       logoBoxW = logoBoxH * aspect;
     }
 
+    /* Receipt-only: render a QR (for the payload) and a Code 128 barcode
+       (for the second payload) into PNGs that pdf-lib can embed. We
+       compute the PNG buffers up here so the per-page drawHeader call
+       doesn't have to wait for a 100ms encode per page. */
+    let qrPng = null;
+    let qrPngDims = null;
+    let barcodePng = null;
+    let barcodePngDims = null;
+    if (template.id === 'receipt') {
+      const { toBuffer } = await import('bwip-js');
+      if (state.form.qrPayload) {
+        const png = Buffer.from(await toBuffer({
+          bcid: 'qrcode',
+          text: state.form.qrPayload,
+          scale: 6,
+          height: 24, /* mm */
+          includetext: false,
+          paddingwidth: 0,
+          paddingheight: 0,
+        }));
+        qrPng = await out.embedPng(png);
+        /* bwip-js doesn't return image dimensions from toBuffer; read
+           them from the PNG header. IHDR is at byte 16, width: 16-19,
+           height: 20-23. */
+        qrPngDims = { width: readPngDims(png, 0), height: readPngDims(png, 4) };
+      }
+      if (state.form.barcodePayload) {
+        const png = Buffer.from(await toBuffer({
+          bcid: 'code128',
+          text: state.form.barcodePayload,
+          scale: 3,
+          height: 14, /* mm */
+          includetext: true,
+          textxalign: 'center',
+          textsize: 8,
+        }));
+        barcodePng = await out.embedPng(png);
+        barcodePngDims = { width: readPngDims(png, 0), height: readPngDims(png, 4) };
+      }
+    }
+
     /* Pagination: each page gets the header band, the bill-to block (only on page 1),
        the line items table (paginated), and the totals + footer (on the last page). */
     const visibleLines = (state.lines || []).filter((l) => l.desc);
@@ -963,6 +1049,7 @@ async function exportInvoice(root) {
         template, sheetW, sheetH, marginL, marginR, marginT, contentW,
         helv, helvBold, helvIt, accent, ink, muted, rule, rgb,
         logoImg, logoBoxH, logoBoxW,
+        qrPng, qrPngDims, barcodePng, barcodePngDims,
         company: state.identity, invoice: state.form, client, pageLabel,
       });
       if (pageIdx === 0) {
@@ -973,12 +1060,13 @@ async function exportInvoice(root) {
       cursorY = drawLineTable(pdfPage, {
         cursorY, marginL, marginB, contentW, helv, helvBold, accent, ink, muted, rule, rgb,
         lines: pageLines, currency: state.form.currency, startIndex: pageIdx * rowsPerPage,
+        template,
       });
       if (isLastPage(pageIdx)) {
         /* The totals block needs to know the totals and currency conversion. */
         const after = drawTotals(pdfPage, {
           cursorY, marginL, marginB, contentW, helv, helvBold, accent, ink, muted, rule, rgb,
-          totals, form: state.form,
+          totals, form: state.form, template,
         });
         /* Notes. */
         if (state.form.notes) {
@@ -1021,7 +1109,7 @@ function estimateRowsPerPage(sheetH, marginT, marginB, template) {
 }
 
 function drawHeader(page, ctx) {
-  const { template, sheetH, marginL, marginT, contentW, helv, helvBold, helvIt, accent, ink, muted, rule, rgb, logoImg, logoBoxH, logoBoxW, company, invoice, client, pageLabel } = ctx;
+  const { template, sheetH, marginL, marginT, contentW, helv, helvBold, helvIt, accent, ink, muted, rule, rgb, logoImg, logoBoxH, logoBoxW, qrPng, qrPngDims, barcodePng, barcodePngDims, company, invoice, client, pageLabel } = ctx;
   let cursorY = sheetH - marginT;
   /* The Modern template has no accent rule (it uses a side rule instead). */
   if (template.id === 'classic') {
@@ -1053,11 +1141,13 @@ function drawHeader(page, ctx) {
       ay -= 9;
     }
   }
-  /* Right-side INVOICE block. */
+  /* Right-side title block. The receipt template says RECEIPT and
+     suppresses the Due date (receipts are settled, not due). */
   const rightW = 180;
   const rightX = marginL + contentW - rightW;
   const titleSize = template.id === 'modern' ? 28 : 22;
-  page.drawText('INVOICE', { x: rightX, y: cursorY - (template.id === 'modern' ? 22 : 18), size: titleSize, font: helvBold, color: accent });
+  const titleText = template.id === 'receipt' ? 'RECEIPT' : 'INVOICE';
+  page.drawText(titleText, { x: rightX, y: cursorY - (template.id === 'modern' ? 22 : 18), size: titleSize, font: helvBold, color: accent });
   if (template.id === 'modern') {
     /* Side rule below INVOICE. */
     page.drawRectangle({ x: rightX, y: cursorY - 26, width: 60, height: 1.5, color: accent });
@@ -1065,8 +1155,12 @@ function drawHeader(page, ctx) {
   const meta = [
     ['#', invoice.number],
     ['Issued', formatDate(invoice.issueDate)],
-    ['Due', formatDate(invoice.dueDate)],
   ];
+  if (template.id !== 'receipt') {
+    meta.push(['Due', formatDate(invoice.dueDate)]);
+  } else if (invoice.paidDate) {
+    meta.push(['Paid', invoice.paidDate]);
+  }
   let metaY = cursorY - (template.id === 'modern' ? 38 : 32);
   for (const [k, v] of meta) {
     if (!v) continue;
@@ -1076,6 +1170,34 @@ function drawHeader(page, ctx) {
   }
   if (pageLabel) {
     page.drawText(pageLabel, { x: rightX, y: cursorY - 60, size: 8, font: helvIt, color: muted });
+  }
+  /* Receipt-only: stack the QR (top) and the barcode (below) inside
+     the right-side column, beneath the meta block. Sizing: the QR is
+     a square ~22mm wide; the barcode is a 1D strip ~50mm wide and
+     ~14mm tall. We compute display dimensions from the embedded PNG
+     dimensions so the call doesn't need to know the original px/mm. */
+  if (template.id === 'receipt') {
+    const qrDisplayMm = 22;
+    const barcodeDisplayWmm = 50;
+    const barcodeDisplayHmm = 14;
+    if (qrPng) {
+      const w = mmToPt(qrDisplayMm);
+      const h = qrPngDims && qrPngDims.height
+        ? (qrPngDims.height / qrPngDims.width) * w
+        : w;
+      const x = marginL + contentW - w;
+      const y = metaY - 6 - h;
+      page.drawImage(qrPng, { x, y, width: w, height: h });
+      metaY = y - 4;
+    }
+    if (barcodePng) {
+      const w = mmToPt(barcodeDisplayWmm);
+      const h = mmToPt(barcodeDisplayHmm);
+      const x = marginL + contentW - w;
+      const y = metaY - 6 - h;
+      page.drawImage(barcodePng, { x, y, width: w, height: h });
+      metaY = y - 4;
+    }
   }
   cursorY = Math.min(cursorY - 50, metaY - 8);
   return cursorY;
@@ -1104,20 +1226,25 @@ function drawBillTo(page, ctx) {
 }
 
 function drawLineTable(page, ctx) {
-  const { cursorY, marginL, marginB, contentW, helv, helvBold, accent, ink, muted, rule, rgb, lines, currency, startIndex } = ctx;
+  const { cursorY, marginL, marginB, contentW, helv, helvBold, accent, ink, muted, rule, rgb, lines, currency, startIndex, template } = ctx;
   let y = cursorY;
   /* Header band. */
   page.drawRectangle({ x: marginL, y: y - 4, width: contentW, height: 18, color: rgb(0.96, 0.97, 0.94) });
+  /* Column layout. Receipts drop the tax column, so we widen QTY and
+     PRICE into the space. */
+  const isReceipt = template && template.id === 'receipt';
   const colDescX = marginL;
-  const colQtyX = marginL + contentW * 0.55;
-  const colPriceX = marginL + contentW * 0.70;
+  const colQtyX = marginL + contentW * (isReceipt ? 0.60 : 0.55);
+  const colPriceX = marginL + contentW * (isReceipt ? 0.78 : 0.70);
   const colTaxX = marginL + contentW * 0.83;
   const colSubX = marginL + contentW;
   page.drawText('#', { x: colDescX + 4, y: y + 2, size: 7, font: helvBold, color: accent });
   page.drawText('DESCRIPTION', { x: colDescX + 18, y: y + 2, size: 7, font: helvBold, color: accent });
   page.drawText('QTY', { x: colQtyX, y: y + 2, size: 7, font: helvBold, color: accent });
   page.drawText('PRICE', { x: colPriceX, y: y + 2, size: 7, font: helvBold, color: accent });
-  page.drawText('TAX', { x: colTaxX, y: y + 2, size: 7, font: helvBold, color: accent });
+  if (!isReceipt) {
+    page.drawText('TAX', { x: colTaxX, y: y + 2, size: 7, font: helvBold, color: accent });
+  }
   const subLabel = 'TOTAL';
   page.drawText(subLabel, { x: colSubX - 70, y: y + 2, size: 7, font: helvBold, color: accent });
   y -= 14;
@@ -1129,8 +1256,10 @@ function drawLineTable(page, ctx) {
     page.drawText(truncate(line.desc, 48), { x: colDescX + 18, y, size: 9, font: helv, color: ink });
     page.drawText(String(line.qty), { x: colQtyX, y, size: 9, font: helv, color: ink });
     page.drawText(formatMoney(line.price, currency), { x: colPriceX, y, size: 9, font: helv, color: ink });
-    const tr = (line.taxRate === null || line.taxRate === undefined || line.taxRate === '') ? '' : `${line.taxRate}%`;
-    page.drawText(tr, { x: colTaxX, y, size: 9, font: helv, color: muted });
+    if (!isReceipt) {
+      const tr = (line.taxRate === null || line.taxRate === undefined || line.taxRate === '') ? '' : `${line.taxRate}%`;
+      page.drawText(tr, { x: colTaxX, y, size: 9, font: helv, color: muted });
+    }
     page.drawText(formatMoney(t.gross2, currency), { x: colSubX - 70, y, size: 9, font: helvBold, color: ink });
     y -= 12;
     page.drawLine({ start: { x: marginL, y: y + 6 }, end: { x: marginL + contentW, y: y + 6 }, thickness: 0.4, color: rule });
@@ -1139,40 +1268,50 @@ function drawLineTable(page, ctx) {
 }
 
 function drawTotals(page, ctx) {
-  const { cursorY, marginL, marginB, contentW, helv, helvBold, accent, ink, muted, rule, rgb, totals, form } = ctx;
+  const { cursorY, marginL, marginB, contentW, helv, helvBold, accent, ink, muted, rule, rgb, totals, form, template } = ctx;
   const totalsX = marginL + contentW * 0.55;
   const w = contentW * 0.45;
   let y = cursorY - 4;
+  const isReceipt = template && template.id === 'receipt';
   drawTotalRow(page, helv, helvBold, totalsX, w, y, 'Subtotal', formatMoney(totals.linesNet, form.currency), ink, 9, false);
   if (totals.invoiceDiscount > 0) {
     y -= 12;
     const label = form.discountType === 'percent' ? `Invoice discount (${form.discountValue}%)` : 'Invoice discount';
     drawTotalRow(page, helv, helvBold, totalsX, w, y, label, `-${formatMoney(totals.invoiceDiscount, form.currency)}`, ink, 9, false);
   }
-  y -= 12;
-  drawTotalRow(page, helv, helvBold, totalsX, w, y, 'Subtotal after discount', formatMoney(totals.afterInvoiceDiscount, form.currency), ink, 9, false);
-  y -= 12;
-  drawTotalRow(page, helv, helvBold, totalsX, w, y, `Tax (${form.taxRate}%)`, formatMoney(totals.tax, form.currency), ink, 9, false);
+  if (!isReceipt) {
+    y -= 12;
+    drawTotalRow(page, helv, helvBold, totalsX, w, y, 'Subtotal after discount', formatMoney(totals.afterInvoiceDiscount, form.currency), ink, 9, false);
+    y -= 12;
+    drawTotalRow(page, helv, helvBold, totalsX, w, y, `Tax (${form.taxRate}%)`, formatMoney(totals.tax, form.currency), ink, 9, false);
+  }
   y -= 6;
   page.drawLine({ start: { x: totalsX, y }, end: { x: marginL + contentW, y }, thickness: 0.5, color: accent });
   y -= 14;
-  drawTotalRow(page, helv, helvBold, totalsX, w, y, 'Total due', formatMoney(totals.total, form.currency), accent, 12, true);
-  if (form.baseCurrency) {
-    y -= 14;
-    const rate = Number(form.conversionRate) || 1;
-    const converted = formatMoney(totals.total * rate, form.baseCurrency);
-    drawTotalRow(page, helv, helvIt, totalsX, w, y, `≈ in ${form.baseCurrency}`, `≈ ${converted}`, muted, 9, false);
-  }
-  const paid = Number(form.paid) || 0;
-  if (paid > 0) {
-    y -= 10;
-    page.drawLine({ start: { x: totalsX, y }, end: { x: marginL + contentW, y }, thickness: 0.4, color: rule });
-    y -= 12;
-    const label = `Paid${form.paidDate ? ` (${form.paidDate})` : ''}`;
-    drawTotalRow(page, helv, helvBold, totalsX, w, y, label, `-${formatMoney(paid, form.currency)}`, ink, 9, false);
-    y -= 14;
-    const balance = totals.total - paid;
-    drawTotalRow(page, helv, helvBold, totalsX, w, y, 'Balance due', formatMoney(balance, form.currency), balance > 0 ? accent : ink, 12, true);
+  if (isReceipt) {
+    /* Receipt: a single "Paid in full" grand line. Use the total as the
+       paid amount (a receipt is, by definition, settled). */
+    const label = form.paidDate ? `Paid in full (${form.paidDate})` : 'Paid in full';
+    drawTotalRow(page, helv, helvBold, totalsX, w, y, label, formatMoney(totals.total, form.currency), accent, 12, true);
+  } else {
+    drawTotalRow(page, helv, helvBold, totalsX, w, y, 'Total due', formatMoney(totals.total, form.currency), accent, 12, true);
+    if (form.baseCurrency) {
+      y -= 14;
+      const rate = Number(form.conversionRate) || 1;
+      const converted = formatMoney(totals.total * rate, form.baseCurrency);
+      drawTotalRow(page, helv, helvIt, totalsX, w, y, `≈ in ${form.baseCurrency}`, `≈ ${converted}`, muted, 9, false);
+    }
+    const paid = Number(form.paid) || 0;
+    if (paid > 0) {
+      y -= 10;
+      page.drawLine({ start: { x: totalsX, y }, end: { x: marginL + contentW, y }, thickness: 0.4, color: rule });
+      y -= 12;
+      const label = `Paid${form.paidDate ? ` (${form.paidDate})` : ''}`;
+      drawTotalRow(page, helv, helvBold, totalsX, w, y, label, `-${formatMoney(paid, form.currency)}`, ink, 9, false);
+      y -= 14;
+      const balance = totals.total - paid;
+      drawTotalRow(page, helv, helvBold, totalsX, w, y, 'Balance due', formatMoney(balance, form.currency), balance > 0 ? accent : ink, 12, true);
+    }
   }
   return y;
 }
@@ -1246,6 +1385,63 @@ function wrapText(text, font, size, maxWidth) {
   return out;
 }
 function mmToPt(mm) { return mm * 2.83465; }
+
+/* Read a 4-byte big-endian unsigned int from a PNG buffer. The PNG
+   IHDR chunk is at byte 16, with width at 16-19 and height at 20-23. */
+function readPngDims(buf, offset) {
+  return ((buf[16 + offset] << 24) | (buf[17 + offset] << 16) | (buf[18 + offset] << 8) | buf[19 + offset]) >>> 0;
+}
+
+/* Render the QR and barcode to PNG data URLs for the on-screen preview.
+   Only the receipt template uses these, but we always keep them up to
+   date so switching templates is instant. In Node / tests there's no
+   canvas, so we just no-op. */
+let lastCodeSig = '';
+async function refreshCodeImgs() {
+  if (typeof document === 'undefined' || typeof window === 'undefined') return;
+  const sig = `${state.form.qrPayload}|${state.form.barcodePayload}|${state.form.template}`;
+  if (sig === lastCodeSig) return;
+  lastCodeSig = sig;
+  const { toCanvas } = await import('bwip-js/browser');
+  if (state.form.qrPayload) {
+    const canvas = document.createElement('canvas');
+    try {
+      toCanvas(canvas, {
+        bcid: 'qrcode',
+        text: state.form.qrPayload,
+        scale: 6,
+        height: 24, /* mm */
+        includetext: false,
+        paddingwidth: 0,
+        paddingheight: 0,
+      });
+      state.codeImgs.qr = canvas.toDataURL('image/png');
+    } catch (err) {
+      state.codeImgs.qr = '';
+    }
+  } else {
+    state.codeImgs.qr = '';
+  }
+  if (state.form.barcodePayload) {
+    const canvas = document.createElement('canvas');
+    try {
+      toCanvas(canvas, {
+        bcid: 'code128',
+        text: state.form.barcodePayload,
+        scale: 3,
+        height: 14, /* mm */
+        includetext: true,
+        textxalign: 'center',
+        textsize: 8,
+      });
+      state.codeImgs.barcode = canvas.toDataURL('image/png');
+    } catch (err) {
+      state.codeImgs.barcode = '';
+    }
+  } else {
+    state.codeImgs.barcode = '';
+  }
+}
 function hexToRgb(hex) {
   const h = (hex || '#000000').replace('#', '');
   const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
@@ -1306,12 +1502,15 @@ function previewCss(sheet, margins) {
     ${scope} .inv-page.inv-template-minimal .inv-footer { border-top: 0.5px solid #d3d8ce; font-size: 7pt; color: #5d6a5b; }
     ${scope} .inv-footer > div { display: flex; flex-direction: column; }
     ${scope} .inv-footer .inv-label { color: ${state.identity.accent}; font-weight: 700; text-transform: uppercase; font-size: 6pt; letter-spacing: 0.6px; margin-bottom: 1px; }
+    ${scope} .inv-code-qr { display: block; width: 22mm; height: 22mm; margin-top: 6px; align-self: flex-end; }
+    ${scope} .inv-code-barcode { display: block; width: 50mm; height: 14mm; margin-top: 4px; align-self: flex-end; }
   `;
 }
 
 function renderInvoiceHtml() {
   const totals = computeTotals();
   const client = state.clients.find((c) => c.id === state.form.clientId);
+  const isReceipt = state.form.template === 'receipt';
   const logoHtml = state.logo ? `<img src="${arrayBufferToBase64(state.logo.bytes, state.logo.type)}" alt="">` : '';
   const linesHtml = (state.lines || []).filter((l) => l.desc).map((l, i) => {
     const t = lineTotals(l);
@@ -1321,7 +1520,7 @@ function renderInvoiceHtml() {
       <td>${escapeHtml(l.desc)}</td>
       <td class="inv-num">${l.qty}</td>
       <td class="inv-num">${formatMoney(l.price, state.form.currency)}</td>
-      <td class="inv-tax">${tr}</td>
+      ${isReceipt ? '' : `<td class="inv-tax">${tr}</td>`}
       <td class="inv-num"><b>${formatMoney(t.gross2, state.form.currency)}</b></td>
     </tr>`;
   }).join('');
@@ -1330,6 +1529,17 @@ function renderInvoiceHtml() {
   const paid = Number(state.form.paid) || 0;
   const balance = totals.total - paid;
   const conversion = state.form.baseCurrency ? `≈ ${formatMoney(totals.total * (Number(state.form.conversionRate) || 1), state.form.baseCurrency)}` : '';
+  /* Receipt-only: stack the QR (top, ~22mm square) and the barcode
+     (below, ~50mm wide × 14mm tall) in the head-right column, beneath
+     the meta block. */
+  const codeHtml = isReceipt ? `
+    ${state.codeImgs.qr ? `<img class="inv-code-qr" src="${state.codeImgs.qr}" alt="QR code">` : ''}
+    ${state.codeImgs.barcode ? `<img class="inv-code-barcode" src="${state.codeImgs.barcode}" alt="Barcode">` : ''}
+  ` : '';
+  const titleText = isReceipt ? 'RECEIPT' : 'INVOICE';
+  const dueMetaHtml = isReceipt
+    ? (state.form.paidDate ? `<div><b>Paid</b> ${escapeHtml(state.form.paidDate)}</div>` : '')
+    : (dueDate ? `<div><b>Due</b> ${escapeHtml(dueDate)}</div>` : '');
   return `
     <div class="inv-head">
       <div class="inv-head-left">
@@ -1340,17 +1550,18 @@ function renderInvoiceHtml() {
         </div>
       </div>
       <div class="inv-head-right">
-        <div class="inv-title">INVOICE${state.form.template === 'modern' ? '<div class="inv-title-rule"></div>' : ''}</div>
+        <div class="inv-title">${titleText}${state.form.template === 'modern' ? '<div class="inv-title-rule"></div>' : ''}</div>
         <div class="inv-meta">
           <div><b>#</b> ${escapeHtml(state.form.number)}</div>
           <div><b>Issued</b> ${escapeHtml(issueDate)}</div>
-          ${dueDate ? `<div><b>Due</b> ${escapeHtml(dueDate)}</div>` : ''}
+          ${dueMetaHtml}
         </div>
+        ${codeHtml}
       </div>
     </div>
     ${client ? `
       <div class="inv-bill">
-        <div class="inv-label">Bill to</div>
+        <div class="inv-label">${isReceipt ? 'Received from' : 'Bill to'}</div>
         <strong>${escapeHtml(client.name)}</strong>
         ${client.email ? `<div>${escapeHtml(client.email)}</div>` : ''}
         ${client.address ? `<div>${escapeHtml(client.address).replace(/\n/g, '<br>')}</div>` : ''}
@@ -1363,24 +1574,29 @@ function renderInvoiceHtml() {
           <th>Description</th>
           <th class="inv-num">Qty</th>
           <th class="inv-num">Price</th>
-          <th>Tax</th>
+          ${isReceipt ? '' : '<th>Tax</th>'}
           <th class="inv-num">Total</th>
         </tr>
       </thead>
-      <tbody>${linesHtml || '<tr><td colspan="6" style="color:#aaa; text-align:center;">No line items yet</td></tr>'}</tbody>
+      <tbody>${linesHtml || `<tr><td colspan="${isReceipt ? 5 : 6}" style="color:#aaa; text-align:center;">No line items yet</td></tr>`}</tbody>
     </table>
     <div class="inv-spacer"></div>
     <div class="inv-totals">
-      <div class="inv-totals-row"><span>Subtotal (after line discounts)</span><span>${formatMoney(totals.linesNet, state.form.currency)}</span></div>
+      <div class="inv-totals-row"><span>Subtotal${isReceipt ? '' : ' (after line discounts)'}</span><span>${formatMoney(totals.linesNet, state.form.currency)}</span></div>
       ${totals.invoiceDiscount > 0 ? `<div class="inv-totals-row"><span>Invoice discount${state.form.discountType === 'percent' ? ` (${state.form.discountValue}%)` : ''}</span><span>-${formatMoney(totals.invoiceDiscount, state.form.currency)}</span></div>` : ''}
-      <div class="inv-totals-row"><span>Subtotal after discount</span><span>${formatMoney(totals.afterInvoiceDiscount, state.form.currency)}</span></div>
-      <div class="inv-totals-row"><span>Tax (${state.form.taxRate}%)</span><span>${formatMoney(totals.tax, state.form.currency)}</span></div>
-      <div class="inv-totals-row inv-totals-grand"><span>Total due</span><span>${formatMoney(totals.total, state.form.currency)}</span></div>
+      ${isReceipt ? '' : `
+        <div class="inv-totals-row"><span>Subtotal after discount</span><span>${formatMoney(totals.afterInvoiceDiscount, state.form.currency)}</span></div>
+        <div class="inv-totals-row"><span>Tax (${state.form.taxRate}%)</span><span>${formatMoney(totals.tax, state.form.currency)}</span></div>
+      `}
+      ${isReceipt
+        ? `<div class="inv-totals-row inv-totals-grand"><span>${state.form.paidDate ? `Paid in full (${escapeHtml(state.form.paidDate)})` : 'Paid in full'}</span><span>${formatMoney(totals.total, state.form.currency)}</span></div>`
+        : `<div class="inv-totals-row inv-totals-grand"><span>Total due</span><span>${formatMoney(totals.total, state.form.currency)}</span></div>
       ${conversion ? `<div class="inv-totals-row inv-totals-conversion"><span>≈ in ${escapeHtml(state.form.baseCurrency)}</span><span>${escapeHtml(conversion)}</span></div>` : ''}
       ${paid > 0 ? `
         <div class="inv-totals-row"><span>Paid${state.form.paidDate ? ` (${escapeHtml(state.form.paidDate)})` : ''}</span><span>-${formatMoney(paid, state.form.currency)}</span></div>
         <div class="inv-totals-row inv-totals-grand"><span>Balance due</span><span>${formatMoney(balance, state.form.currency)}</span></div>
       ` : ''}
+      `}
     </div>
     ${state.form.notes ? `<div class="inv-notes"><div class="inv-label">Notes</div>${escapeHtml(state.form.notes).replace(/\n/g, '<br>')}</div>` : ''}
     <div class="inv-footer">
@@ -1442,6 +1658,7 @@ export const __test = {
   formatMoney,
   setState,
   getState,
+  exportInvoice,
   lineTotals,
   computeTotals,
   lineDiscountAmount,
@@ -1449,4 +1666,6 @@ export const __test = {
   conversionLine,
   CURRENCIES,
   CURRENCY_SYMBOLS,
+  TEMPLATES,
+  readPngDims,
 };
