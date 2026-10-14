@@ -11,6 +11,7 @@ import {
   loadPdfLib,
   pickFiles,
   q,
+  qa,
   safeFileName,
   store,
   toast,
@@ -36,12 +37,19 @@ const defaults = {
   accent: '#315f50',
   logoSize: 60, /* PDF points, the height of the logo block */
   saveName: 'folio-letterhead',
+  mode: 'generate', /* 'generate' or 'overlay' */
+  overlaySource: '',
+  overlayWatermark: '',
+  overlayAngle: -30,
+  overlayOpacity: 12,
+  overlayName: 'folio-overlaid',
 };
 
 const prefs = store('letterhead:v1', defaults);
 const state = {
   form: { ...prefs.read() },
   logo: null, /* { bytes, type, width, height } once an image is loaded */
+  overlay: null, /* { name, bytes } for the PDF being overlaid */
   busy: false,
 };
 
@@ -50,15 +58,20 @@ export function start(root) {
   wireForm(root);
   wireLogo(root);
   wireExport(root);
+  wireOverlay(root);
+  wireMode(root);
   paintForm(root);
+  paintOverlay(root);
+  paintMode(root);
   paintPreview(root);
   return () => {};
 }
 
 /* ------------------------------------------------------------------ ui ---- */
 function layout() {
+  const mode = state.form.mode || 'generate';
   return `
-<div class="lh-shell" id="lhShell">
+<div class="lh-shell" id="lhShell" data-mode="${mode}">
   <section class="panel lh-side" aria-labelledby="lh-side-title">
     <div class="panel-header">
       <div class="panel-title-group">
@@ -66,6 +79,16 @@ function layout() {
         <div><h3 id="lh-side-title">Identity</h3><p>Company details, logo, accent</p></div>
       </div>
       <div class="panel-header-actions">${printButton()}</div>
+    </div>
+    <div class="lh-modes" role="group" aria-label="Letterhead mode">
+      <button type="button" class="lh-mode is-on" data-lh-mode="generate" aria-pressed="true">
+        <strong>Generate letterhead</strong>
+        <small>Standalone single-page PDF</small>
+      </button>
+      <button type="button" class="lh-mode" data-lh-mode="overlay" aria-pressed="false">
+        <strong>Overlay on a PDF</strong>
+        <small>Stamp header + footer on every page</small>
+      </button>
     </div>
     <div class="editor-footer lh-footer">
       <span id="lhStatus">Pick a layout, fill the form, export.</span>
@@ -79,10 +102,11 @@ function layout() {
         <div><h3 id="lh-main-title">Letterhead</h3><p><span class="live-dot"></span> Preview updates as you type</p></div>
       </div>
       <div class="panel-header-actions">
-        <button class="button button-export" type="button" id="lhExport">${downloadIcon}<span>Download letterhead PDF</span></button>
+        <button class="button button-export" type="button" id="lhExport" data-lh-section-button="generate">${downloadIcon}<span>Download letterhead PDF</span></button>
+        <button class="button button-export" type="button" id="lhOverlayGo" data-lh-section-button="overlay" hidden>${downloadIcon}<span>Apply letterhead and save</span></button>
       </div>
     </div>
-    <div class="lh-body">
+    <div class="lh-body" data-lh-section="generate">
       <div class="lh-grid">
         <label class="field"><span class="field-label">Layout</span>
           <select class="text-input" id="lhLayout">
@@ -134,6 +158,39 @@ function layout() {
         <input class="text-input" id="lhSaveName" type="text" value="${escapeHtml(state.form.saveName)}" />
       </label>
     </div>
+    <div class="lh-body lh-body-overlay" data-lh-section="overlay" hidden>
+      <div class="lh-grid">
+        <div class="field grow">
+          <span class="field-label">Source PDF</span>
+          <div class="lh-logo-row">
+            <button class="button button-light" type="button" id="lhPickOverlay">Choose PDF</button>
+            <span class="lh-hint" id="lhOverlayHint">No PDF — pick a multi-page document to stamp.</span>
+          </div>
+        </div>
+      </div>
+      <div class="lh-grid">
+        <label class="field grow"><span class="field-label">Body watermark (optional)</span>
+          <input class="text-input" id="lhOverlayWatermark" type="text" value="${escapeHtml(state.form.overlayWatermark)}" placeholder="e.g. DRAFT, CONFIDENTIAL" autocomplete="off" />
+        </label>
+      </div>
+      <div class="lh-grid">
+        <label class="field"><span class="field-label">Watermark angle</span>
+          <div class="range-row">
+            <input class="range-input" id="lhOverlayAngle" type="range" min="-90" max="90" step="5" value="${state.form.overlayAngle}" />
+            <output class="range-readout" id="lhOverlayAngleOut">${state.form.overlayAngle}°</output>
+          </div>
+        </label>
+        <label class="field"><span class="field-label">Watermark opacity</span>
+          <div class="range-row">
+            <input class="range-input" id="lhOverlayOpacity" type="range" min="4" max="40" step="1" value="${state.form.overlayOpacity}" />
+            <output class="range-readout" id="lhOverlayOpacityOut">${state.form.overlayOpacity}%</output>
+          </div>
+        </label>
+      </div>
+      <label class="field"><span class="field-label">Save as</span>
+        <input class="text-input" id="lhOverlayName" type="text" value="${escapeHtml(state.form.overlayName)}" />
+      </label>
+    </div>
     <div class="lh-preview-wrap" id="lhPreviewWrap">
       <div class="lh-preview" id="lhPreview" aria-label="Letterhead preview"></div>
     </div>
@@ -141,8 +198,11 @@ function layout() {
 </div>`;
 }
 
+function save() {
+  prefs.write(state.form);
+}
+
 function wireForm(root) {
-  const save = debounce(() => prefs.write(state.form), 200);
   const fields = [
     ['#lhLayout', 'layout', (v) => v],
     ['#lhCompany', 'companyName'],
@@ -239,6 +299,7 @@ async function readImageDimensions(bytes, type) {
 
 function wireExport(root) {
   q('#lhExport', root)?.addEventListener('click', () => exportLetterhead(root));
+  q('#lhOverlayGo', root)?.addEventListener('click', () => runOverlay(root));
 }
 
 /* ---------------------------------------------------------------- preview ---- */
@@ -348,6 +409,12 @@ function paintForm(root) {
   q('#lhSaveName', root).value = state.form.saveName;
   q('#lhLogoSize', root).value = state.form.logoSize;
   q('#lhLogoSizeOut', root).textContent = `${state.form.logoSize} pt`;
+  q('#lhOverlayWatermark', root).value = state.form.overlayWatermark;
+  q('#lhOverlayName', root).value = state.form.overlayName;
+  q('#lhOverlayAngle', root).value = state.form.overlayAngle;
+  q('#lhOverlayAngleOut', root).textContent = `${state.form.overlayAngle}°`;
+  q('#lhOverlayOpacity', root).value = state.form.overlayOpacity;
+  q('#lhOverlayOpacityOut', root).textContent = `${state.form.overlayOpacity}%`;
 }
 
 async function exportLetterhead(root) {
@@ -511,3 +578,226 @@ async function withBusy(root, buttonId, label, work) {
     button.innerHTML = original;
   }
 }
+
+/* ------------------------------------------------------------ overlay ---- */
+/* Apply the letterhead to every page of a source PDF: a header band
+   at the top, the four-column footer at the bottom, and (optionally)
+   a large rotated watermark across the body. The source's existing
+   content is left untouched. */
+function wireOverlay(root) {
+  const button = q('#lhPickOverlay', root);
+  const hint = q('#lhOverlayHint', root);
+  const open = () => pickFiles({ accept: 'application/pdf,.pdf', multiple: false })
+    .then((files) => {
+      const file = files && files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const bytes = new Uint8Array(reader.result);
+        try {
+          const { PDFDocument } = await loadPdfLib();
+          const doc = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
+          const pageCount = doc.getPageCount();
+          if (!pageCount) throw new Error('That PDF has no pages.');
+          state.overlay = { name: file.name, bytes, pageCount };
+          state.form.overlaySource = file.name;
+          if (hint) hint.textContent = `${file.name} — ${pageCount} page${pageCount === 1 ? '' : 's'}`;
+          paintOverlay(root);
+        } catch (err) {
+          console.error('letterhead: could not read overlay source', err);
+          toast('That PDF could not be opened.', true);
+        }
+      };
+      reader.onerror = () => toast('That PDF could not be read.', true);
+      reader.readAsArrayBuffer(file);
+    });
+  button?.addEventListener('click', open);
+
+  /* Range sliders. */
+  const angle = q('#lhOverlayAngle', root);
+  const angleOut = q('#lhOverlayAngleOut', root);
+  if (angle) {
+    angle.addEventListener('input', () => {
+      state.form.overlayAngle = Number(angle.value);
+      if (angleOut) angleOut.textContent = `${state.form.overlayAngle}°`;
+      save();
+    });
+  }
+  const opacity = q('#lhOverlayOpacity', root);
+  const opacityOut = q('#lhOverlayOpacityOut', root);
+  if (opacity) {
+    opacity.addEventListener('input', () => {
+      state.form.overlayOpacity = Number(opacity.value);
+      if (opacityOut) opacityOut.textContent = `${state.form.overlayOpacity}%`;
+      save();
+    });
+  }
+  const text = q('#lhOverlayWatermark', root);
+  if (text) {
+    text.addEventListener('input', () => {
+      state.form.overlayWatermark = text.value;
+      save();
+    });
+  }
+  const name = q('#lhOverlayName', root);
+  if (name) {
+    name.addEventListener('input', () => {
+      state.form.overlayName = name.value;
+      save();
+    });
+  }
+}
+
+function paintOverlay(root) {
+  const hint = q('#lhOverlayHint', root);
+  if (state.overlay && hint) {
+    hint.textContent = `${state.overlay.name} — ${state.overlay.pageCount} page${state.overlay.pageCount === 1 ? '' : 's'}.`;
+  }
+}
+
+function wireMode(root) {
+  qa('[data-lh-mode]', root).forEach((node) => {
+    node.addEventListener('click', () => setMode(node.dataset.lhMode, root));
+  });
+}
+
+function setMode(mode, root) {
+  state.form.mode = mode;
+  save();
+  paintMode(root);
+}
+
+function paintMode(root) {
+  const shell = q('#lhShell', root);
+  if (shell) shell.dataset.mode = state.form.mode;
+  qa('[data-lh-mode]', root).forEach((node) => {
+    const on = node.dataset.lhMode === state.form.mode;
+    node.classList.toggle('is-on', on);
+    node.setAttribute('aria-pressed', String(on));
+  });
+  qa('[data-lh-section]', root).forEach((node) => {
+    node.hidden = node.dataset.lhSection !== state.form.mode;
+  });
+  qa('[data-lh-section-button]', root).forEach((node) => {
+    node.hidden = node.dataset.lhSectionButton !== state.form.mode;
+  });
+  const status = q('#lhStatus', root);
+  if (status) {
+    status.textContent = state.form.mode === 'overlay'
+      ? 'Pick a PDF, fill the form, apply the letterhead.'
+      : 'Pick a layout, fill the form, export.';
+  }
+}
+
+async function runOverlay(root) {
+  if (!state.overlay) { toast('Pick a source PDF first.'); return; }
+  if (!state.form.companyName) { toast('Add a company name first.'); return; }
+  await withBusy(root, '#lhOverlayGo', 'Stamping…', async () => {
+    const { PDFDocument, StandardFonts, rgb, degrees } = await loadPdfLib();
+    const src = await PDFDocument.load(state.overlay.bytes, { ignoreEncryption: true, updateMetadata: false });
+    const helv = await src.embedFont(StandardFonts.Helvetica);
+    const helvBold = await src.embedFont(StandardFonts.HelveticaBold);
+    const helvIt = await src.embedFont(StandardFonts.HelveticaOblique);
+    const accent = hexToRgb(state.form.accent);
+    const muted = rgb(0.31, 0.36, 0.34);
+    let logo = null;
+    if (state.logo) {
+      logo = state.logo.type === 'image/png'
+        ? await src.embedPng(state.logo.bytes)
+        : await src.embedJpg(state.logo.bytes);
+    }
+    /* Pre-compute the footer columns. */
+    const cols = [];
+    if (state.form.address) cols.push({ label: 'Address', value: state.form.address });
+    if (state.form.phone) cols.push({ label: 'Phone', value: state.form.phone });
+    if (state.form.email) cols.push({ label: 'Email', value: state.form.email });
+    if (state.form.website) cols.push({ label: 'Web', value: state.form.website });
+    for (let i = 0; i < src.getPageCount(); i += 1) {
+      const page = src.getPage(i);
+      const { width: pw, height: ph } = page.getSize();
+      const margin = 36; /* 0.5 inch */
+      const contentW = pw - margin * 2;
+      /* Header: optional accent rule + company + tagline + logo. */
+      const layout = LAYOUTS.find((l) => l.id === state.form.layout) || LAYOUTS[0];
+      let cursorY = ph - margin;
+      if (layout.id === 'classic') {
+        page.drawRectangle({ x: margin, y: cursorY - 3, width: contentW, height: 3, color: accent });
+        cursorY -= 10;
+      }
+      const companySize = 12;
+      const taglineSize = 8;
+      const companyText = state.form.companyName || ' ';
+      const taglineText = state.form.tagline || '';
+      const companyW = helvBold.widthOfTextAtSize(companyText, companySize);
+      const taglineW = helvIt.widthOfTextAtSize(taglineText, taglineSize);
+      let logoBoxW = 0;
+      let logoBoxH = 0;
+      let companyX = margin;
+      let companyY = cursorY - companySize;
+      if (logo) {
+        const aspect = state.logo.width / state.logo.height;
+        logoBoxH = Math.min(28, state.form.logoSize * 0.4);
+        logoBoxW = logoBoxH * aspect;
+        const x = layout.id === 'modern' ? margin + contentW - logoBoxW : margin;
+        page.drawImage(logo, { x, y: cursorY - logoBoxH, width: logoBoxW, height: logoBoxH });
+      }
+      const textX = logo ? (layout.id === 'modern' ? margin : margin + logoBoxW + 8) : margin;
+      const alignRight = layout.id === 'modern';
+      const drawX = alignRight ? margin + contentW - (logo ? logoBoxW : 0) - Math.max(companyW, taglineW) - 8 : textX;
+      page.drawText(companyText, { x: drawX, y: companyY, size: companySize, font: helvBold, color: accent });
+      if (taglineText) {
+        page.drawText(taglineText, { x: drawX, y: companyY - taglineSize - 2, size: taglineSize, font: helvIt, color: muted });
+      }
+      cursorY = companyY - 16;
+      /* Divider below header. */
+      if (layout.id === 'classic' || layout.id === 'modern') {
+        page.drawLine({ start: { x: margin, y: cursorY - 4 }, end: { x: margin + contentW, y: cursorY - 4 }, thickness: 0.5, color: rgb(0.83, 0.85, 0.81) });
+        cursorY -= 8;
+      }
+      /* Footer: divider + columns. */
+      if (cols.length) {
+        const footerTop = margin + 36;
+        if (layout.id === 'modern') {
+          page.drawLine({ start: { x: margin, y: margin }, end: { x: margin, y: footerTop + 12 }, thickness: 0.7, color: accent });
+        } else {
+          page.drawLine({ start: { x: margin, y: footerTop + 12 }, end: { x: margin + contentW, y: footerTop + 12 }, thickness: 0.5, color: layout.id === 'minimal' ? accent : rgb(0.83, 0.85, 0.81) });
+        }
+        const colW = contentW / cols.length;
+        cols.forEach((col, ci) => {
+          const x = margin + colW * ci;
+          page.drawText(col.label.toUpperCase(), { x, y: footerTop, size: 6, font: helvBold, color: accent });
+          const lines = col.value.split('\n');
+          let ty = footerTop - 8;
+          for (const line of lines) {
+            if (ty < margin - 4) break;
+            page.drawText(line, { x, y: ty, size: 8, font: helv, color: muted });
+            ty -= 9;
+          }
+        });
+      }
+      /* Body watermark. */
+      if (state.form.overlayWatermark) {
+        const wmText = state.form.overlayWatermark;
+        const wmSize = Math.max(48, Math.min(pw, ph) * 0.18);
+        const wmColor = { ...accent, opacity: state.form.overlayOpacity / 100 };
+        page.drawText(wmText, {
+          x: pw / 2 - helvBold.widthOfTextAtSize(wmText, wmSize) / 2,
+          y: ph / 2 - wmSize / 3,
+          size: wmSize,
+          font: helvBold,
+          color: wmColor,
+          rotate: degrees(state.form.overlayAngle),
+        });
+      }
+    }
+    const out = await src.save({ useObjectStreams: false });
+    const stem = (state.form.overlayName || 'folio-overlaid').trim() || 'folio-overlaid';
+    const name = safeFileName(stem, 'pdf');
+    downloadBlob(new Blob([out], { type: 'application/pdf' }), name);
+    toast(`${name} is ready — ${state.overlay.pageCount} page${state.overlay.pageCount === 1 ? '' : 's'} stamped.`);
+  });
+}
+
+/* Test-only handle: lets the jsdom test reach into the same module
+   instance. Not part of the public API. */
+export const __test = { state, runOverlay };
