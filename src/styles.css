@@ -465,6 +465,9 @@ body[data-tool]:not([data-tool="markdown"]) .more-section { margin-top: 34px; }
 .lab-row-margins .text-input-narrow { width: 78px; }
 .lab-row-sliders { align-items: flex-start; }
 .lab-row-sliders .field { flex: 1 1 150px; }
+.lab-row-flags { align-items: center; }
+.lab-flag { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; color: #1f2a24; cursor: pointer; }
+.lab-flag input { margin: 0; }
 .lab-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 2px; padding-top: 12px; border-top: 1px solid #f0f0eb; }
 .lab-actions .field { flex: 1 1 180px; }
 .cv-modes { padding-top: 14px; }

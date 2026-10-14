@@ -35,6 +35,7 @@ const MODES = [
   { id: 'watermark', label: 'Watermark', note: 'Stamp text on pages' },
   { id: 'remove-watermark', label: 'Remove watermark', note: 'Strip "DRAFT" and friends' },
   { id: 'margins', label: 'Frame & trim', note: 'Real page margins' },
+  { id: 'print-sheet', label: 'Print sheet', note: 'Bleed, crop & imposition' },
   { id: 'batch', label: 'Batch rename', note: 'Title → merge or zip' },
   { id: 'zine', label: 'Zine', note: 'Cut & stack imposition' },
   { id: 'bookmarks', label: 'Bookmarks', note: 'Read, split, rewrite links' },
@@ -44,6 +45,34 @@ const MODES = [
 const MM_PER_UNIT = { mm: 1, in: 25.4, pt: 25.4 / 72 };
 
 const POSITIONS = ['top-left', 'top-center', 'top-right', 'middle-left', 'centre', 'middle-right', 'bottom-left', 'bottom-center', 'bottom-right'];
+
+/* Print-sheet mode: build a press-ready sheet from a source PDF.
+   Bleed is added past the trim box. Crop marks are 5mm corner ticks
+   that straddle the trim line. Registration marks are a cross with a
+   centre circle at the centre of each imposition cell. Color bars are
+   an 8-swatch CMYK strip along the bottom edge of the sheet. */
+const PRINT_PRESETS = [
+  { id: 'magazine',      label: 'Magazine',      sheet: 'A4',    bleed: 3, crop: true,  reg: true,  colorBars: false, impose: '1up' },
+  { id: 'photo-book',    label: 'Photo book',    sheet: 'A3',    bleed: 5, crop: true,  reg: true,  colorBars: true,  impose: '2up' },
+  { id: 'business-card', label: 'Business card', sheet: 'A4',    bleed: 3, crop: true,  reg: false, colorBars: false, impose: '8up' },
+  { id: 'custom',        label: 'Custom',        sheet: 'A3',    bleed: 3, crop: true,  reg: true,  colorBars: false, impose: '1up' },
+];
+
+const PRINT_SHEETS = {
+  A3:    { width: 297,   height: 420   },
+  A4:    { width: 210,   height: 297   },
+  A5:    { width: 148,   height: 210   },
+  SRA3:  { width: 320,   height: 450   },
+  Letter:{ width: 215.9, height: 279.4 },
+};
+
+const PRINT_IMPOSE = {
+  '1up':     { cols: 1, rows: 1 },
+  '2up':     { cols: 1, rows: 2 },
+  '4up':     { cols: 2, rows: 2 },
+  '8up':     { cols: 2, rows: 4 },
+  'saddle8': { cols: 2, rows: 4 },
+};
 
 const defaults = {
   mode: 'merge',
@@ -80,6 +109,16 @@ const defaults = {
   marginRight: 12,
   marginBottom: 12,
   marginLeft: 12,
+  printSource: '',
+  printPreset: 'magazine',
+  printSheet: 'A4',
+  printBleed: 3,
+  printCropMarks: true,
+  printRegistration: true,
+  printColorBars: false,
+  printImpose: '1up',
+  printRange: '',
+  printName: 'folio-print-sheet',
 };
 
 const prefs = store('pdf-lab:v1', defaults);
@@ -248,6 +287,46 @@ function layout() {
         </div>
         <p class="lab-hint" id="labMarginHint">Add a frame to give a scan a printable border, or trim to cut a fat binding edge off.</p>
         <div class="lab-actions"><span></span><button class="button button-export" type="button" id="labMarginGo">${downloadIcon}<span>Download reframed PDF</span></button></div>
+      </div>
+
+      <div class="lab-mode-panel" data-mode-panel="print-sheet" hidden>
+        <p class="lab-help">Build a press-ready sheet from a PDF: pick a preset or set the bleed, crop / registration marks, sheet size and imposition grid, then download. The output is one PDF, one page per output sheet.</p>
+        <div class="lab-row">
+          <label class="field grow"><span class="field-label">Source file</span><select class="text-input" id="labPrintSource"></select></label>
+        </div>
+        <div class="lab-row">
+          <label class="field"><span class="field-label">Preset</span>
+            <select class="text-input" id="labPrintPreset">
+              ${PRINT_PRESETS.map((p) => `<option value="${p.id}">${p.label}</option>`).join('')}
+            </select>
+          </label>
+          <label class="field"><span class="field-label">Sheet</span>
+            <select class="text-input" id="labPrintSheet">
+              ${Object.keys(PRINT_SHEETS).map((s) => `<option value="${s}">${s}</option>`).join('')}
+            </select>
+          </label>
+          <label class="field"><span class="field-label">Imposition</span>
+            <select class="text-input" id="labPrintImpose">
+              <option value="1up">1-up (single)</option>
+              <option value="2up">2-up (booklet)</option>
+              <option value="4up">4-up (2×2)</option>
+              <option value="8up">8-up (2×4)</option>
+              <option value="saddle8">8-up saddle</option>
+            </select>
+          </label>
+          <label class="field"><span class="field-label">Bleed (mm)</span><input class="text-input text-input-narrow" id="labPrintBleed" type="number" min="0" max="10" step="0.5" value="${state.form.printBleed}" /></label>
+        </div>
+        <div class="lab-row lab-row-flags">
+          <label class="lab-flag"><input type="checkbox" id="labPrintCrop" ${state.form.printCropMarks ? 'checked' : ''} /><span>Crop marks</span></label>
+          <label class="lab-flag"><input type="checkbox" id="labPrintReg" ${state.form.printRegistration ? 'checked' : ''} /><span>Registration marks</span></label>
+          <label class="lab-flag"><input type="checkbox" id="labPrintBars" ${state.form.printColorBars ? 'checked' : ''} /><span>Color bars</span></label>
+        </div>
+        <div class="lab-row">
+          <label class="field grow"><span class="field-label">Pages (blank = all)</span><input class="text-input" id="labPrintRange" type="text" placeholder="e.g. 1-12, 14" value="${state.form.printRange}" /></label>
+          <label class="field"><span class="field-label">Save as</span><input class="text-input" id="labPrintName" type="text" value="${state.form.printName}" /></label>
+        </div>
+        <p class="lab-hint" id="labPrintHint">Add a PDF on the left, then choose a preset or tweak the fields below.</p>
+        <div class="lab-actions"><span></span><button class="button button-export" type="button" id="labPrintGo">${downloadIcon}<span>Download print sheet</span></button></div>
       </div>
 
       <div class="lab-mode-panel" data-mode-panel="watermark" hidden>
@@ -502,6 +581,7 @@ function render(root) {
   paintBatchList(root);
   paintZineHint(root);
   paintBookmarkHint(root);
+  paintPrintHint(root);
 }
 
 function setMode(mode, root) {
@@ -513,6 +593,19 @@ function setMode(mode, root) {
   paintWatermarkHint(root);
   paintZineHint(root);
   paintBookmarkHint(root);
+  paintPrintHint(root);
+  if (mode === 'print-sheet') {
+    /* Sync the form fields to the current state in case the user is just opening this mode. */
+    const set = (id, value) => { const el = q(id, root); if (el && document.activeElement !== el) el.value = value; };
+    const check = (id, value) => { const el = q(id, root); if (el) el.checked = !!value; };
+    set('#labPrintPreset', state.form.printPreset);
+    set('#labPrintSheet', state.form.printSheet);
+    set('#labPrintImpose', state.form.printImpose);
+    set('#labPrintBleed', state.form.printBleed);
+    check('#labPrintCrop', state.form.printCropMarks);
+    check('#labPrintReg', state.form.printRegistration);
+    check('#labPrintBars', state.form.printColorBars);
+  }
 }
 
 function paintMode(root) {
@@ -597,7 +690,7 @@ function paintSelects(root) {
   const options = state.sources.length
     ? state.sources.map((source) => `<option value="${source.id}">${escapeHtml(source.name)} · ${source.pageCount}p</option>`).join('')
     : '<option value="">Add a PDF first</option>';
-  for (const [id, key] of [['#labSplitSource', 'splitSource'], ['#labWatermarkSource', 'watermarkSource'], ['#labMarginSource', 'marginSource'], ['#labBookmarkSource', 'bookmarkSource'], ['#labRemoveWatermarkSource', 'removeWatermarkSource'], ['#labZineSource', 'zineSource']]) {
+  for (const [id, key] of [['#labSplitSource', 'splitSource'], ['#labWatermarkSource', 'watermarkSource'], ['#labMarginSource', 'marginSource'], ['#labBookmarkSource', 'bookmarkSource'], ['#labRemoveWatermarkSource', 'removeWatermarkSource'], ['#labZineSource', 'zineSource'], ['#labPrintSource', 'printSource']]) {
     const select = q(id, root);
     if (!select) continue;
     const previous = select.value;
@@ -704,7 +797,7 @@ function paintCounts(root) {
 }
 
 function activeSource(root, key) {
-  const selector = { splitSource: '#labSplitSource', watermarkSource: '#labWatermarkSource', marginSource: '#labMarginSource' }[key] ?? '#labMergeList';
+  const selector = { splitSource: '#labSplitSource', watermarkSource: '#labWatermarkSource', marginSource: '#labMarginSource', printSource: '#labPrintSource' }[key] ?? '#labMergeList';
   const id = q(selector, root)?.value;
   return state.sources.find((source) => source.id === id) ?? state.sources[0] ?? null;
 }
@@ -897,6 +990,57 @@ function bindForm(root) {
     persist(root);
     paintMarginForm(root);
   });
+  /* print-sheet mode bindings */
+  q('#labPrintSource', root)?.addEventListener('change', (event) => {
+    state.form.printSource = event.target.value;
+    paintPrintHint(root);
+    save();
+  });
+  q('#labPrintPreset', root)?.addEventListener('change', (event) => {
+    applyPrintPreset(event.target.value, root);
+    save();
+  });
+  q('#labPrintSheet', root)?.addEventListener('change', (event) => {
+    state.form.printSheet = event.target.value;
+    state.form.printPreset = 'custom';
+    if (q('#labPrintPreset', root)) q('#labPrintPreset', root).value = 'custom';
+    paintPrintHint(root);
+    save();
+  });
+  q('#labPrintImpose', root)?.addEventListener('change', (event) => {
+    state.form.printImpose = event.target.value;
+    state.form.printPreset = 'custom';
+    if (q('#labPrintPreset', root)) q('#labPrintPreset', root).value = 'custom';
+    paintPrintHint(root);
+    save();
+  });
+  q('#labPrintBleed', root)?.addEventListener('input', (event) => {
+    state.form.printBleed = Math.max(0, Math.min(10, Number(event.target.value || 0)));
+    state.form.printPreset = 'custom';
+    if (q('#labPrintPreset', root)) q('#labPrintPreset', root).value = 'custom';
+    paintPrintHint(root);
+    save();
+  });
+  const printCheckbox = (id, key) => q(id, root)?.addEventListener('change', (event) => {
+    state.form[key] = !!event.target.checked;
+    state.form.printPreset = 'custom';
+    if (q('#labPrintPreset', root)) q('#labPrintPreset', root).value = 'custom';
+    paintPrintHint(root);
+    save();
+  });
+  printCheckbox('#labPrintCrop', 'printCropMarks');
+  printCheckbox('#labPrintReg', 'printRegistration');
+  printCheckbox('#labPrintBars', 'printColorBars');
+  q('#labPrintRange', root)?.addEventListener('input', (event) => {
+    state.form.printRange = event.target.value;
+    paintPrintHint(root);
+    save();
+  });
+  q('#labPrintName', root)?.addEventListener('input', (event) => {
+    state.form.printName = event.target.value;
+    save();
+  });
+  q('#labPrintGo', root)?.addEventListener('click', () => exportPrintSheet(root));
   q('#labSplitSource', root)?.addEventListener('change', (event) => {
     state.form.splitSource = event.target.value;
     paintSplitHint(root);
@@ -1838,3 +1982,229 @@ async function runZine(root) {
     toast(`${layout.label} (${layout.pages} pages on ${layout.sheets} sheet${layout.sheets === 1 ? '' : 's'}) is ready.`);
   });
 }
+
+/* Apply one of the print presets: overwrite the form + DOM, then repaint
+   the live hint. Anything the user types after this point flips the preset
+   selector back to "Custom" via the change handlers. */
+function applyPrintPreset(presetId, root) {
+  const preset = PRINT_PRESETS.find((p) => p.id === presetId);
+  if (!preset || preset.id === 'custom') {
+    state.form.printPreset = 'custom';
+    paintPrintHint(root);
+    return;
+  }
+  state.form.printPreset = preset.id;
+  state.form.printSheet = preset.sheet;
+  state.form.printBleed = preset.bleed;
+  state.form.printCropMarks = preset.crop;
+  state.form.printRegistration = preset.reg;
+  state.form.printColorBars = preset.colorBars;
+  state.form.printImpose = preset.impose;
+  const set = (id, value) => { const el = q(id, root); if (el) el.value = value; };
+  const check = (id, value) => { const el = q(id, root); if (el) el.checked = !!value; };
+  set('#labPrintSheet', state.form.printSheet);
+  set('#labPrintImpose', state.form.printImpose);
+  set('#labPrintBleed', state.form.printBleed);
+  check('#labPrintCrop', state.form.printCropMarks);
+  check('#labPrintReg', state.form.printRegistration);
+  check('#labPrintBars', state.form.printColorBars);
+  paintPrintHint(root);
+}
+
+/* Live hint under the print sheet panel. */
+function paintPrintHint(root) {
+  const hint = q('#labPrintHint', root);
+  if (!hint) return;
+  const source = activeSource(root, 'printSource');
+  if (!source) {
+    hint.textContent = 'Add a PDF on the left, then choose a preset or tweak the fields below.';
+    return;
+  }
+  const sheet = PRINT_SHEETS[state.form.printSheet] ?? PRINT_SHEETS.A4;
+  const imp = PRINT_IMPOSE[state.form.printImpose] ?? PRINT_IMPOSE['1up'];
+  const perSheet = imp.cols * imp.rows;
+  /* Resolve the range to a list of page numbers. */
+  const all = rangeTargets(source.pageCount, state.form.printRange);
+  const pageCount = all.length;
+  const sheetCount = Math.max(1, Math.ceil(pageCount / perSheet));
+  const bleed = Math.max(0, Number(state.form.printBleed) || 0);
+  const marks = [];
+  if (state.form.printCropMarks) marks.push('crop');
+  if (state.form.printRegistration) marks.push('registration');
+  if (state.form.printColorBars) marks.push('color bars');
+  const marksLabel = marks.length ? `, ${marks.join(' + ')}` : '';
+  const pagesLabel = pageCount > 8 ? `${all.slice(0, 6).join(',')},…,${all[all.length - 1]}` : all.join(',');
+  hint.textContent = `${source.name} — ${pageCount} page${pageCount === 1 ? '' : 's'} (${pagesLabel}) on ${sheetCount} ${sheetCount === 1 ? 'sheet' : 'sheets'} of ${state.form.printSheet} (${imp.cols}×${imp.rows}, ${perSheet}-up)${bleed ? `, ${bleed}mm bleed` : ''}${marksLabel}.`;
+}
+
+/* Export: assemble the press-ready sheet PDF. */
+async function exportPrintSheet(root) {
+  const source = activeSource(root, 'printSource');
+  if (!source) { toast('Add a PDF first.', true); return; }
+  const sheetMm = PRINT_SHEETS[state.form.printSheet] ?? PRINT_SHEETS.A4;
+  const imp = PRINT_IMPOSE[state.form.printImpose] ?? PRINT_IMPOSE['1up'];
+  const perSheet = imp.cols * imp.rows;
+  const bleed = Math.max(0, Math.min(10, Number(state.form.printBleed) || 0));
+  await withBusy(root, '#labPrintGo', 'print sheet', async () => {
+    const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
+    const src = await PDFDocument.load(source.buffer);
+    const indices = rangeTargets(source.pageCount, state.form.printRange);
+    if (!indices.length) { toast('That range matches no pages.', true); return; }
+    const out = await PDFDocument.create();
+    const helv = await out.embedFont(StandardFonts.Helvetica);
+    const ink = rgb(0, 0, 0);
+    /* Geometry: 6mm mark zone on each edge, then an imposition grid of
+       cols × rows equal cells inside the remaining usable area. */
+    const markZone = 6;
+    const usableW = sheetMm.width - 2 * markZone;
+    const usableH = sheetMm.height - 2 * markZone;
+    const cellW = usableW / imp.cols;
+    const cellH = usableH / imp.rows;
+    const innerW = cellW * 0.92;
+    const innerH = cellH * 0.92;
+    for (let start = 0; start < indices.length; start += perSheet) {
+      const group = indices.slice(start, start + perSheet);
+      const sheet = out.addPage([mmToPt(sheetMm.width), mmToPt(sheetMm.height)]);
+      sheet.drawRectangle({ x: 0, y: 0, width: mmToPt(sheetMm.width), height: mmToPt(sheetMm.height), color: rgb(1, 1, 1) });
+      /* Copy all the source pages in this group into the output document, then draw each one.
+         rangeTargets returns 1-indexed page numbers; getPage is 0-indexed. */
+      const srcPages = group.map((pageNumber) => src.getPage(pageNumber - 1));
+      const embedded = await out.embedPages(srcPages);
+      group.forEach((srcIdx, slot) => {
+        const col = slot % imp.cols;
+        const row = Math.floor(slot / imp.cols);
+        const srcPage = src.getPage(srcIdx - 1);
+        const { width: sw, height: sh } = srcPage.getSize();
+        /* Trim box: scale the source page to fit inside the inner cell,
+           preserving aspect ratio. */
+        const scale = Math.min(innerW / swMm(sw), innerH / shMm(sh));
+        const trimW = sw * scale;
+        const trimH = sh * scale;
+        const cellCenterX = markZone + (col + 0.5) * cellW;
+        const cellCenterY = sheetMm.height - (markZone + (row + 0.5) * cellH);
+        const trimX = cellCenterX - trimW / 2;
+        const trimY = cellCenterY - trimH / 2;
+        /* Draw the embedded source page scaled to the trim box. */
+        sheet.drawPage(embedded[slot], { x: mmToPt(trimX), y: mmToPt(trimY), width: mmToPt(trimW), height: mmToPt(trimH) });
+        /* Bleed: draw a thin outline of the bleed area. */
+        if (bleed > 0) {
+          sheet.drawRectangle({
+            x: mmToPt(trimX - bleed),
+            y: mmToPt(trimY - bleed),
+            width: mmToPt(trimW + bleed * 2),
+            height: mmToPt(trimH + bleed * 2),
+            borderColor: rgb(0.78, 0.82, 0.78),
+            borderWidth: 0.3,
+          });
+        }
+        /* Crop marks. */
+        if (state.form.printCropMarks) {
+          drawCropMarks(sheet, trimX, trimY, trimW, trimH, bleed, mmToPt, rgb, ink);
+        }
+        /* Registration mark at the cell's centre cross. */
+        if (state.form.printRegistration) {
+          drawRegistrationMark(sheet, cellCenterX, cellCenterY, 3, mmToPt, rgb, ink);
+        }
+      });
+      /* Color bars along the bottom edge of the sheet. */
+      if (state.form.printColorBars) {
+        drawColorBars(sheet, sheetMm.width, markZone, mmToPt, rgb);
+      }
+      /* Sheet label. */
+      const sheetNo = Math.floor(start / perSheet) + 1;
+      const totalSheets = Math.ceil(indices.length / perSheet);
+      const label = `${source.name.replace(/\.pdf$/i, '')} · sheet ${sheetNo}/${totalSheets}`;
+      sheet.drawText(label, {
+        x: mmToPt(markZone),
+        y: mmToPt(2),
+        size: 7,
+        font: helv,
+        color: rgb(0.4, 0.4, 0.4),
+      });
+    }
+    const outBytes = await out.save({ useObjectStreams: true });
+    const safeName = (state.form.printName || 'folio-print-sheet').replace(/[^a-z0-9-_]+/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'folio-print-sheet';
+    const name = `${safeName}.pdf`;
+    const blob = new Blob([new Uint8Array(outBytes)], { type: 'application/pdf' });
+    downloadBlob(blob, name);
+    toast(`${name} is ready — ${out.getPageCount()} pages, ${(outBytes.byteLength / 1024).toFixed(1)} KB.`);
+    toast(`${out.getPageCount()} print sheets ready.`);
+  });
+}
+
+/* Crop marks: 4 corner ticks at the trim box, extending 5mm outward
+   across the mark zone. Each tick is a 5mm line. */
+function drawCropMarks(sheet, trimX, trimY, trimW, trimH, bleed, mmToPt, rgb, ink) {
+  const tickLen = 5;
+  const w = 0.25;
+  const b = bleed;
+  const x0 = trimX - b, y0 = trimY - b;
+  const x1 = trimX + trimW + b, y1 = trimY + trimH + b;
+  /* Top-left corner: horizontal goes left, vertical goes down. */
+  sheet.drawLine({ start: { x: mmToPt(x0 - tickLen), y: mmToPt(y1) }, end: { x: mmToPt(x0), y: mmToPt(y1) }, thickness: w, color: ink });
+  sheet.drawLine({ start: { x: mmToPt(x0), y: mmToPt(y1) }, end: { x: mmToPt(x0), y: mmToPt(y1 + tickLen) }, thickness: w, color: ink });
+  /* Top-right corner. */
+  sheet.drawLine({ start: { x: mmToPt(x1), y: mmToPt(y1) }, end: { x: mmToPt(x1 + tickLen), y: mmToPt(y1) }, thickness: w, color: ink });
+  sheet.drawLine({ start: { x: mmToPt(x1), y: mmToPt(y1) }, end: { x: mmToPt(x1), y: mmToPt(y1 + tickLen) }, thickness: w, color: ink });
+  /* Bottom-left. */
+  sheet.drawLine({ start: { x: mmToPt(x0 - tickLen), y: mmToPt(y0) }, end: { x: mmToPt(x0), y: mmToPt(y0) }, thickness: w, color: ink });
+  sheet.drawLine({ start: { x: mmToPt(x0), y: mmToPt(y0) }, end: { x: mmToPt(x0), y: mmToPt(y0 - tickLen) }, thickness: w, color: ink });
+  /* Bottom-right. */
+  sheet.drawLine({ start: { x: mmToPt(x1), y: mmToPt(y0) }, end: { x: mmToPt(x1 + tickLen), y: mmToPt(y0) }, thickness: w, color: ink });
+  sheet.drawLine({ start: { x: mmToPt(x1), y: mmToPt(y0) }, end: { x: mmToPt(x1), y: mmToPt(y0 - tickLen) }, thickness: w, color: ink });
+}
+
+/* Registration mark: a 6mm cross with a 1.5mm centre circle, drawn in
+   the centre of the cell. */
+function drawRegistrationMark(sheet, cx, cy, armMm, mmToPt, rgb, ink) {
+  const arm = armMm;
+  /* Cross. */
+  sheet.drawLine({ start: { x: mmToPt(cx - arm), y: mmToPt(cy) }, end: { x: mmToPt(cx + arm), y: mmToPt(cy) }, thickness: 0.4, color: ink });
+  sheet.drawLine({ start: { x: mmToPt(cx), y: mmToPt(cy - arm) }, end: { x: mmToPt(cx), y: mmToPt(cy + arm) }, thickness: 0.4, color: ink });
+  /* Centre circle. */
+  sheet.drawCircle({ x: mmToPt(cx), y: mmToPt(cy), size: mmToPt(0.9), borderColor: ink, borderWidth: 0.4 });
+}
+
+/* Color bars: 8 swatches in CMYK + RGB-style positions along the bottom
+   of the sheet, between the mark zone and the sheet edge. */
+function drawColorBars(sheet, sheetW, markZone, mmToPt, rgb) {
+  const swatches = [
+    { color: rgb(0.95, 0.95, 0), name: 'Y' },
+    { color: rgb(0.95, 0, 0.95), name: 'M' },
+    { color: rgb(0, 0.95, 0.95), name: 'C' },
+    { color: rgb(0, 0, 0), name: 'K' },
+    { color: rgb(1, 0, 0), name: 'R' },
+    { color: rgb(0, 0.6, 0), name: 'G' },
+    { color: rgb(0, 0, 1), name: 'B' },
+    { color: rgb(0.5, 0.5, 0.5), name: 'W' },
+  ];
+  const totalW = sheetW - 2 * markZone;
+  const sw = totalW / swatches.length;
+  const h = 4;
+  const y = markZone * 0.25;
+  swatches.forEach((s, i) => {
+    const x = markZone + i * sw;
+    sheet.drawRectangle({ x: mmToPt(x + 0.4), y: mmToPt(y), width: mmToPt(sw - 0.8), height: mmToPt(h), color: s.color, borderColor: rgb(0.5, 0.5, 0.5), borderWidth: 0.1 });
+  });
+}
+
+/* Parse the optional "1-12, 14" range into a 1-indexed list of page numbers.
+   Blank range returns [1..pageCount]. */
+function rangeTargets(pageCount, range) {
+  if (!range || !range.trim()) return Array.from({ length: pageCount }, (_, i) => i + 1);
+  const parsed = parsePageRanges(range, pageCount);
+  if (!parsed.ok || !parsed.ranges.length) return Array.from({ length: pageCount }, (_, i) => i + 1);
+  const out = [];
+  for (const r of parsed.ranges) {
+    for (let p = r.start; p <= r.end; p += 1) out.push(p);
+  }
+  return out;
+}
+
+function mmToPt(mm) { return mm * 2.83465; }
+function swMm(pt) { return pt / 2.83465; }
+function shMm(pt) { return pt / 2.83465; }
+
+/* Test-only handle: lets the jsdom test reach into the same module
+   instance. Not part of the public API. */
+export const __test = { state, addFiles, applyPrintPreset, rangeTargets };
