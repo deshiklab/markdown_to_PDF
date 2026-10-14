@@ -321,29 +321,33 @@ function paintPreview(root) {
 function previewCss(sheet, form) {
   /* The preview is rendered at a fixed CSS scale: 1mm = 2.4px gives a
      595-ish px preview for A4 portrait (210mm × 2.4 = 504px), and
-     the page proportions are preserved. */
+     the page proportions are preserved. Every selector here is scoped
+     to `.lh-preview` so the preview's rules can't leak into the form
+     panel (the form's own .lh-body sits next to the preview and shares
+     the class). */
   const px = (mm) => `${mm * 2.4}px`;
   const ptToPx = (pt) => `${pt * 2.4 * 0.3528}px`;
+  const scope = '.lh-preview';
   return `
-    .lh-page { width: ${px(sheet.width)}; height: ${px(sheet.height)}; padding: ${px(sheet.margins.top)} ${px(sheet.margins.right)} ${px(sheet.margins.bottom)} ${px(sheet.margins.left)}; box-sizing: border-box; background: #fff; color: #1f2c1e; font-family: 'Charter', 'Georgia', 'Times New Roman', serif; box-shadow: 0 6px 24px rgba(0,0,0,0.08); display: flex; flex-direction: column; }
-    .lh-masthead { display: flex; align-items: center; gap: 14px; padding-bottom: 14px; border-bottom: 1px solid #d3d8ce; }
-    .lh-masthead.is-modern { justify-content: flex-end; text-align: right; }
-    .lh-masthead.is-minimal { border-bottom: none; padding-bottom: 8px; }
-    .lh-masthead img { max-height: 60px; max-width: 220px; object-fit: contain; }
-    .lh-masthead .lh-mark { display: flex; flex-direction: column; }
-    .lh-masthead strong { font-size: 22pt; color: ${form.accent}; letter-spacing: 0.5px; }
-    .lh-masthead small { font-size: 9pt; color: #5d6a5b; margin-top: 2px; }
-    .lh-masthead .lh-tagline { font-style: italic; color: #5d6a5b; font-size: 10pt; }
-    .lh-spacer { flex: 1; }
-    .lh-body { flex: 1; }
-    .lh-body p { font-size: 11pt; line-height: 1.5; color: #28342a; }
-    .lh-footer { display: flex; gap: 24px; align-items: baseline; padding-top: 14px; border-top: 1px solid #d3d8ce; color: #4f5b4d; font-size: 9pt; }
-    .lh-footer.is-modern { border-top: none; border-left: 1px solid ${form.accent}; padding-left: 14px; padding-top: 0; }
-    .lh-footer.is-minimal { border-top: 1px solid ${form.accent}; padding-top: 8px; }
-    .lh-footer > div { display: flex; flex-direction: column; }
-    .lh-footer .lh-label { color: ${form.accent}; font-weight: 700; text-transform: uppercase; font-size: 7pt; letter-spacing: 0.6px; margin-bottom: 2px; }
-    .lh-rule { height: 4px; background: ${form.accent}; margin: 0 0 12px; border-radius: 1px; }
-    .lh-rule.is-bottom { margin: 12px 0 0; }
+    ${scope} .lh-page { width: ${px(sheet.width)}; height: ${px(sheet.height)}; padding: ${px(sheet.margins.top)} ${px(sheet.margins.right)} ${px(sheet.margins.bottom)} ${px(sheet.margins.left)}; box-sizing: border-box; background: #fff; color: #1f2c1e; font-family: 'Charter', 'Georgia', 'Times New Roman', serif; box-shadow: 0 6px 24px rgba(0,0,0,0.08); display: flex; flex-direction: column; }
+    ${scope} .lh-masthead { display: flex; align-items: center; gap: 14px; padding-bottom: 14px; border-bottom: 1px solid #d3d8ce; }
+    ${scope} .lh-masthead.is-modern { justify-content: flex-end; text-align: right; }
+    ${scope} .lh-masthead.is-minimal { border-bottom: none; padding-bottom: 8px; }
+    ${scope} .lh-masthead img { max-height: 60px; max-width: 220px; object-fit: contain; }
+    ${scope} .lh-masthead .lh-mark { display: flex; flex-direction: column; }
+    ${scope} .lh-masthead strong { font-size: 22pt; color: ${form.accent}; letter-spacing: 0.5px; }
+    ${scope} .lh-masthead small { font-size: 9pt; color: #5d6a5b; margin-top: 2px; }
+    ${scope} .lh-masthead .lh-tagline { font-style: italic; color: #5d6a5b; font-size: 10pt; }
+    ${scope} .lh-spacer { flex: 1; }
+    ${scope} .lh-body { flex: 1; }
+    ${scope} .lh-body p { font-size: 11pt; line-height: 1.5; color: #28342a; }
+    ${scope} .lh-footer { display: flex; gap: 24px; align-items: baseline; padding-top: 14px; border-top: 1px solid #d3d8ce; color: #4f5b4d; font-size: 9pt; }
+    ${scope} .lh-footer.is-modern { border-top: none; border-left: 1px solid ${form.accent}; padding-left: 14px; padding-top: 0; }
+    ${scope} .lh-footer.is-minimal { border-top: 1px solid ${form.accent}; padding-top: 8px; }
+    ${scope} .lh-footer > div { display: flex; flex-direction: column; }
+    ${scope} .lh-footer .lh-label { color: ${form.accent}; font-weight: 700; text-transform: uppercase; font-size: 7pt; letter-spacing: 0.6px; margin-bottom: 2px; }
+    ${scope} .lh-rule { height: 4px; background: ${form.accent}; margin: 0 0 12px; border-radius: 1px; }
+    ${scope} .lh-rule.is-bottom { margin: 12px 0 0; }
   `;
 }
 
