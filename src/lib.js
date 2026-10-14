@@ -534,3 +534,111 @@ export function emptyState({ title, note, action } = {}) {
     action || null,
   ]);
 }
+
+/* -------------------------------------------------------- zines ---- */
+/* Imposition patterns for the three zine formats the studio supports.
+   The order[] arrays are zero-based page indices into the source PDF
+   (after blanks are appended) and tell the sheet where each page goes
+   on its grid. The first half of an order is side 1 (front of the
+   sheet); the second half is side 2 (back of the sheet). Each side
+   reads top-to-bottom, left-to-right. */
+
+/** 8-page mini zine — one A4/Letter sheet, cut & stack.
+   Landscape sheet, 4 columns × 2 rows = 8 panels, one per page.
+   Each panel becomes one page of the zine: cut, stack, staple. */
+const ZINE_8_MINI_ORDER = [0, 1, 2, 3, 4, 5, 6, 7];
+
+/** 16-page saddle — two A4/Letter sheets, cut & stack.
+   Each sheet is landscape, 4 columns × 2 rows = 8 panels. */
+function zine16SaddleOrder() {
+  return [0, 1, 2, 3, 4, 5, 6, 7];
+}
+
+/** 4-page quarter-fold — one A4/Letter sheet, cut & stack.
+   Landscape sheet, 2 columns × 2 rows = 4 panels. */
+const ZINE_4_QUARTER_ORDER = [0, 1, 2, 3];
+
+export const ZINE_LAYOUTS = {
+  '8-mini': { label: '8-page mini', pages: 8, sheets: 1, sides: 2, cols: 4, rows: 2, order: ZINE_8_MINI_ORDER, note: 'One sheet, double-sided, fold & cut.' },
+  '16-saddle': { label: '16-page saddle', pages: 16, sheets: 2, sides: 2, cols: 4, rows: 2, order: zine16SaddleOrder(8), note: 'Two sheets, nested, stapled at the spine.' },
+  '4-quarter': { label: '4-page quarter-fold', pages: 4, sheets: 1, sides: 2, cols: 2, rows: 2, order: ZINE_4_QUARTER_ORDER, note: 'One sheet, double-sided, fold twice.' },
+};
+
+/** Take a PDF and lay it out as a zine. The source can have any number
+   of pages up to the layout's count; missing pages become blank.
+   Returns a fresh PDF (sheets) ready to download or print. */
+export async function imposeZine(pdfBytes, layoutId) {
+  const layout = ZINE_LAYOUTS[layoutId];
+  if (!layout) throw new Error(`Unknown zine layout "${layoutId}".`);
+  const { PDFDocument } = await loadPdfLib();
+  const src = await PDFDocument.load(pdfBytes, { ignoreEncryption: true, updateMetadata: false });
+  const srcCount = src.getPageCount();
+  const padded = await PDFDocument.create();
+  /* Copy real pages. */
+  if (srcCount) {
+    const copied = await padded.copyPages(src, src.getPageIndices());
+    for (const page of copied) padded.addPage(page);
+  }
+  /* Pad with blank pages sized like the last source page (or A4). */
+  const last = srcCount ? src.getPage(srcCount - 1) : null;
+  const blankSize = last ? last.getSize() : { width: 595.28, height: 841.89 };
+  while (padded.getPageCount() < layout.pages) {
+    padded.addPage([blankSize.width, blankSize.height]);
+  }
+  /* If the source has more pages than the layout fits, only the first
+     `layout.pages` are used. */
+  const working = layout.pages === padded.getPageCount() ? padded : await (async () => {
+    const trimmed = await PDFDocument.create();
+    const idx = padded.getPageIndices().slice(0, layout.pages);
+    const copied = await trimmed.copyPages(padded, idx);
+    for (const page of copied) trimmed.addPage(page);
+    return trimmed;
+  })();
+  /* Build the output. Each sheet has `cols * rows` panels per side.
+     The output sheet is the source's own page size; each source page
+     is scaled to fit its panel with its aspect ratio preserved and
+     centered (letterbox) so the pages are not stretched if the
+     panel's aspect does not match the source's. */
+  const out = await PDFDocument.create();
+  const sheetW = working.getPage(0).getSize().width;
+  const sheetH = working.getPage(0).getSize().height;
+  const panelsPerSide = layout.cols * layout.rows;
+  for (let sheet = 0; sheet < layout.sheets; sheet += 1) {
+    for (let side = 0; side < layout.sides; side += 1) {
+      const sheetPage = out.addPage([sheetW, sheetH]);
+      /* Side 2 (the back of the sheet) is intentionally blank for the
+         cut-and-stack workflow: the user prints only side 1 and the
+         back side has no ink on it. Including a blank side in the
+         output makes the file safe to print either single- or
+         double-sided without surprises. */
+      if (side === 1) continue;
+      const sideOrder = layout.order.slice(0, panelsPerSide);
+      const panelW = sheetW / layout.cols;
+      const panelH = sheetH / layout.rows;
+      for (let p = 0; p < panelsPerSide; p += 1) {
+        const col = p % layout.cols;
+        const row = Math.floor(p / layout.cols);
+        const srcPageIndex = sheet * panelsPerSide + sideOrder[p];
+        if (srcPageIndex >= working.getPageCount()) continue;
+        const srcPage = working.getPage(srcPageIndex);
+        const srcSize = srcPage.getSize();
+        const srcAspect = srcSize.width / srcSize.height;
+        const panelAspect = panelW / panelH;
+        let drawW;
+        let drawH;
+        if (srcAspect > panelAspect) {
+          drawW = panelW;
+          drawH = panelW / srcAspect;
+        } else {
+          drawH = panelH;
+          drawW = panelH * srcAspect;
+        }
+        const drawX = col * panelW + (panelW - drawW) / 2;
+        const drawY = sheetH - (row + 1) * panelH + (panelH - drawH) / 2;
+        const [embedded] = await out.embedPdf(working, [srcPageIndex]);
+        sheetPage.drawPage(embedded, { x: drawX, y: drawY, width: drawW, height: drawH });
+      }
+    }
+  }
+  return out.save({ useObjectStreams: false });
+}

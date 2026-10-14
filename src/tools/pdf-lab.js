@@ -10,6 +10,7 @@ import {
   findTextMatches,
   flattenPdfPages,
   hasFiles,
+  imposeZine,
   injected,
   isFileProtocol,
   loadPdfJs,
@@ -24,6 +25,7 @@ import {
   safeFileName,
   store,
   toast,
+  ZINE_LAYOUTS,
 } from '../lib.js';
 import { page, printButton } from '../page.js';
 
@@ -34,6 +36,7 @@ const MODES = [
   { id: 'remove-watermark', label: 'Remove watermark', note: 'Strip "DRAFT" and friends' },
   { id: 'margins', label: 'Frame & trim', note: 'Real page margins' },
   { id: 'batch', label: 'Batch rename', note: 'Title → merge or zip' },
+  { id: 'zine', label: 'Zine', note: 'Cut & stack imposition' },
   { id: 'bookmarks', label: 'Bookmarks', note: 'Read, split, rewrite links' },
 ];
 /* 72 pt to the inch: pdf-lib works in points, the controls in whatever the
@@ -65,6 +68,10 @@ const defaults = {
   removeWatermarkWholeWord: true,
   removeWatermarkFlatten: true,
   mergeName: 'folio-merged',
+  zineSource: '',
+  zineLayout: '8-mini',
+  zineRange: '',
+  zineName: 'folio-zine',
   marginSource: '',
   bookmarkSource: '',
   marginAction: 'frame',
@@ -315,6 +322,26 @@ function layout() {
         </div>
       </div>
 
+      <div class="lab-mode-panel" data-mode-panel="zine" hidden>
+        <p class="lab-help">Lay out a PDF as a zine: one <strong>8-page mini</strong> (cut a single sheet into 8 panels and stack), a <strong>16-page saddle</strong> (cut two sheets into 8 each), or a <strong>4-page quarter-fold</strong> (cut one sheet into 4 panels). Print the result single-sided, cut, stack, and staple.</p>
+        <div class="lab-row">
+          <label class="field grow"><span class="field-label">Source file</span><select class="text-input" id="labZineSource"></select></label>
+          <label class="field grow"><span class="field-label">Layout</span><select class="text-input" id="labZineLayout">
+            ${Object.entries(ZINE_LAYOUTS).map(([id, layout]) => `<option value="${id}">${escapeHtml(layout.label)} — ${layout.note}</option>`).join('')}
+          </select></label>
+        </div>
+        <div class="lab-row lab-row-sliders">
+          <label class="field"><span class="field-label">Pages</span><input class="text-input" id="labZineRange" type="text" placeholder="all, or 1-8" value="${escapeHtml(state.form.zineRange)}" /></label>
+          <label class="field grow"><span class="field-label">Save as</span><input class="text-input" id="labZineName" type="text" value="${escapeHtml(state.form.zineName)}" autocomplete="off" /></label>
+        </div>
+        <div class="lab-actions">
+          <span class="lab-hint" id="labZineHint">Add a PDF to begin.</span>
+          <div class="lab-actions-row">
+            <button class="button button-export" type="button" id="labZineGo">${downloadIcon}<span>Make zine and save</span></button>
+          </div>
+        </div>
+      </div>
+
       <div class="lab-mode-panel" data-mode-panel="bookmarks" hidden>
         <p class="lab-help">Read the outline of a PDF, split it into one file per top-level bookmark, or rewrite the internal links so they survive a reorder.</p>
         <div class="lab-row">
@@ -473,6 +500,8 @@ function render(root) {
   paintSplitHint(root);
   paintWatermarkHint(root);
   paintBatchList(root);
+  paintZineHint(root);
+  paintBookmarkHint(root);
 }
 
 function setMode(mode, root) {
@@ -482,6 +511,8 @@ function setMode(mode, root) {
   paintMergeList(root);
   paintSplitHint(root);
   paintWatermarkHint(root);
+  paintZineHint(root);
+  paintBookmarkHint(root);
 }
 
 function paintMode(root) {
@@ -551,6 +582,7 @@ function paintFiles(root) {
       state.order = state.order.filter((entry) => entry.sourceId !== source.id);
       if (state.form.splitSource === source.id) state.form.splitSource = '';
       if (state.form.watermarkSource === source.id) state.form.watermarkSource = '';
+      if (state.form.zineSource === source.id) state.form.zineSource = '';
       render(root);
     });
     list.append(card);
@@ -565,7 +597,7 @@ function paintSelects(root) {
   const options = state.sources.length
     ? state.sources.map((source) => `<option value="${source.id}">${escapeHtml(source.name)} · ${source.pageCount}p</option>`).join('')
     : '<option value="">Add a PDF first</option>';
-  for (const [id, key] of [['#labSplitSource', 'splitSource'], ['#labWatermarkSource', 'watermarkSource'], ['#labMarginSource', 'marginSource'], ['#labBookmarkSource', 'bookmarkSource'], ['#labRemoveWatermarkSource', 'removeWatermarkSource']]) {
+  for (const [id, key] of [['#labSplitSource', 'splitSource'], ['#labWatermarkSource', 'watermarkSource'], ['#labMarginSource', 'marginSource'], ['#labBookmarkSource', 'bookmarkSource'], ['#labRemoveWatermarkSource', 'removeWatermarkSource'], ['#labZineSource', 'zineSource']]) {
     const select = q(id, root);
     if (!select) continue;
     const previous = select.value;
@@ -885,6 +917,20 @@ function bindForm(root) {
   q('#labBookmarkExport', root)?.addEventListener('click', () => exportBookmarkJson(root));
   q('#labBookmarkSplit', root)?.addEventListener('click', () => splitByBookmark(root));
   q('#labBookmarkRewrite', root)?.addEventListener('click', () => rewriteLinks(root));
+  /* zine mode bindings */
+  text('#labZineName', 'zineName');
+  text('#labZineRange', 'zineRange');
+  q('#labZineSource', root)?.addEventListener('change', (event) => {
+    state.form.zineSource = event.target.value;
+    paintZineHint(root);
+    save();
+  });
+  q('#labZineLayout', root)?.addEventListener('change', (event) => {
+    state.form.zineLayout = event.target.value;
+    paintZineHint(root);
+    save();
+  });
+  q('#labZineGo', root)?.addEventListener('click', () => runZine(root));
   /* remove-watermark mode bindings */
   text('#labRemoveWatermarkText', 'removeWatermarkText');
   text('#labRemoveWatermarkRange', 'removeWatermarkRange');
@@ -1739,5 +1785,56 @@ async function runRemoveWatermark(root) {
     source.size = out.byteLength;
     toast(`${matches.length} ${matches.length === 1 ? 'spot' : 'spots'} covered — ${name} is ready.`);
     paintRemoveWatermarkHint(root);
+  });
+}
+
+/* --------------------------------------------------------------- zine ---- */
+/* Pick the file the Zine panel should read from. */
+function zineSource(root) {
+  const wanted = state.form.zineSource;
+  return state.sources.find((item) => item.id === (wanted || state.sources[0]?.id)) || null;
+}
+
+/* Whichever layout the user picked, falling back to 8-mini. */
+function zineLayoutId() {
+  return ZINE_LAYOUTS[state.form.zineLayout] ? state.form.zineLayout : '8-mini';
+}
+
+/* Update the hint with a one-line description of what the user is
+   about to make, so they can sanity-check before clicking Make. */
+function paintZineHint(root) {
+  const hint = q('#labZineHint', root);
+  if (!hint) return;
+  const source = zineSource(root);
+  if (!source) { hint.textContent = 'Add a PDF to begin.'; return; }
+  const layout = ZINE_LAYOUTS[zineLayoutId()];
+  if (!layout) { hint.textContent = 'Pick a layout to begin.'; return; }
+  const sourcePages = source.pageCount;
+  const used = Math.min(sourcePages, layout.pages);
+  const missing = Math.max(0, layout.pages - sourcePages);
+  const extras = sourcePages > layout.pages ? ` (${sourcePages - layout.pages} extra page${sourcePages - layout.pages === 1 ? '' : 's'} will be dropped)` : '';
+  hint.textContent = `${source.name} — ${used} of ${layout.pages} panel${layout.pages === 1 ? '' : 's'} filled${extras}${missing ? `, ${missing} blank` : ''}. Cut ${layout.sheets} sheet${layout.sheets === 1 ? '' : 's'} into ${layout.pages} panels, stack, staple.`;
+}
+
+async function runZine(root) {
+  const source = zineSource(root);
+  if (!source) { toast('Add a PDF first.'); return; }
+  const layoutId = zineLayoutId();
+  const layout = ZINE_LAYOUTS[layoutId];
+  await withBusy(root, '#labZineGo', 'Imposing…', async () => {
+    const { PDFDocument } = await loadPdfLib();
+    const trimmed = await PDFDocument.create();
+    const full = await PDFDocument.load(source.buffer, { ignoreEncryption: true, updateMetadata: false });
+    const wanted = Math.min(full.getPageCount(), layout.pages);
+    if (wanted === 0) { toast('The selected PDF has no pages.'); return; }
+    const copied = await trimmed.copyPages(full, full.getPageIndices().slice(0, wanted));
+    for (const page of copied) trimmed.addPage(page);
+    const input = await trimmed.save({ useObjectStreams: false });
+    const out = await imposeZine(input, layoutId);
+    const stem = stripPdf(source.name);
+    const name = safeFileName(`${state.form.zineName || 'folio-zine'}-${stem}-${layoutId}`, 'pdf');
+    const blob = new Blob([out], { type: 'application/pdf' });
+    downloadBlob(blob, name);
+    toast(`${layout.label} (${layout.pages} pages on ${layout.sheets} sheet${layout.sheets === 1 ? '' : 's'}) is ready.`);
   });
 }
